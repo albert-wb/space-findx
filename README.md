@@ -6,7 +6,7 @@
 
 ## Visão Geral
 
-**space-findx** é um pipeline modular orientado a objetos que processa séries de imagens FITS brutas e gera submissões no padrão **ADES/XML do MPC (Minor Planet Center)**. O sistema implementa as melhores práticas de redução de dados astronômicos para levantamento de NEOs.
+**space-findx** é um pipeline modular orientado a objetos que processa séries de imagens FITS brutas e gera submissões no padrão **ADES/XML do MPC (Minor Planet Center)**. O sistema implementa as melhores práticas de redução de dados astronômicos para levantamento de NEOs, com duas interfaces gráficas: uma **web** (`index.html`) e uma **desktop** (`CustomTkinter`).
 
 ```
 frames FITS → Calibração CCD → Astrometria WCS → Subtração ZOGY → Detecção + Vetação → Linkagem → ADES XML
@@ -42,6 +42,7 @@ astroquery>=0.4.6
 reproject>=0.11.0
 pyyaml>=6.0
 scipy>=1.11.0
+customtkinter>=5.2.0
 ```
 
 ---
@@ -61,7 +62,7 @@ pip install -r requirements.txt
 
 ## Uso Rápido
 
-### Interface Gráfica (GUI)
+### Interface Web (GUI principal)
 
 Abra o arquivo `index.html` em qualquer navegador moderno:
 
@@ -72,6 +73,21 @@ start index.html
 # Linux/macOS
 xdg-open index.html   # Linux
 open index.html       # macOS
+```
+
+A interface web contém **4 abas**:
+
+| Aba | Função |
+|---|---|
+| **[T] SYSTEM LOGS** | Terminal em tempo real com saída do pipeline e diagrama de fluxo |
+| **[C] CANDIDATES** | Tabela interativa de NEOs/transientes detectados |
+| **[X] ADES XML** | Pré-visualização e download do relatório de submissão ao MPC |
+| **[F] FITS VIEWER** | Visualizador astrométrico com 4 camadas de redução (S/R/D/Scorr) |
+
+### Interface Desktop (CustomTkinter)
+
+```bash
+python run_pipeline.py
 ```
 
 ### Via Python (headless)
@@ -102,21 +118,65 @@ print(f"Submissão ADES gerada em: {ades_path}")
 
 ```
 space-findx/
-├── index.html                  # Interface gráfica (GUI)
-├── style.css                   # Estilos da interface
-├── app.js                      # Lógica da interface
+├── index.html                  # Interface web (GUI principal)
+├── style.css                   # Estilos da interface web
+├── app.js                      # Lógica da interface web
+├── run_pipeline.py             # Ponto de entrada da GUI desktop
 ├── requirements.txt            # Dependências Python
+├── README.md                   # Este arquivo
+├── MANUAL.md                   # Manual detalhado do usuário
+├── gui/
+│   ├── __init__.py             # Exports do pacote GUI
+│   ├── main_window.py          # Janela principal (CustomTkinter)
+│   └── fits_viewer.py          # Widget FITS Viewer (matplotlib + astropy.wcs)
 ├── config/
-│   └── pipeline_config.yaml   # Configuração do pipeline
-└── pipeline/
-    ├── __init__.py
-    ├── pipeline.py             # Orquestrador principal
-    ├── calibration.py          # Calibração CCD (Bias/Dark/Flat)
-    ├── subtraction.py          # Subtração ZOGY
-    ├── detection.py            # Detecção de fontes (DAOStarFinder)
-    ├── trajectory.py           # Linkagem de trajetórias
-    └── ades_exporter.py        # Exportação ADES XML (MPC)
+│   └── pipeline_config.yaml    # Configuração do pipeline
+├── pipeline/
+│   ├── __init__.py
+│   ├── pipeline.py             # Orquestrador principal
+│   ├── calibration.py          # Calibração CCD (Bias/Dark/Flat)
+│   ├── subtraction.py          # Subtração ZOGY
+│   ├── detection.py            # Detecção de fontes (DAOStarFinder)
+│   ├── trajectory.py           # Linkagem de trajetórias
+│   └── ades_exporter.py        # Exportação ADES XML (MPC)
+├── dados/                      # Diretório de dados de entrada (FITS)
+├── output/                     # Diretório padrão de saída
+└── saida/                      # Saída alternativa (batch)
 ```
+
+---
+
+## Funcionalidades da Interface Web
+
+### Seletor Visual de Frames (Gallery View)
+
+Os frames FITS de ciência e referência são carregados em uma **galeria de thumbnails** com pré-visualização. Os thumbnails são gerados com:
+
+- **Binning 8×8** (`data[::8, ::8]`) para prevenção de `MemoryError` — reduz 128 MB → 2 MB por frame
+- **`fits.open(mmap=True)`** — memory-mapped I/O que não carrega o arquivo inteiro em RAM
+- **`ZScaleInterval`** — rejeita raios cósmicos/estrelas saturadas no thumbnail, evitando "cegueira dinâmica"
+
+### Gerenciamento de Saída (Output Directory)
+
+O pipeline salva **obrigatoriamente** dois subprodutos no diretório de saída:
+
+| Subproduto | Formato | Descrição |
+|---|---|---|
+| `ades_submission_YYYY-MM-DD_<obs>.xml` | XML ADES IAU 2017 | Relatório astrométrico para submissão ao MPC |
+| `science_YYYY-MM-DD_diff.fits` | FITS PrimaryHDU | Imagem de diferença com header WCS integralmente preservado |
+
+### FITS Viewer com Camadas de Redução
+
+O visualizador permite alternar entre 4 camadas de redução via botões **S / R / D / Scorr**:
+
+| Camada | Conteúdo | Range típico |
+|---|---|---|
+| **S** (Science) | Imagem CCD calibrada com fontes astronômicas e transientes | 900–2000 ADU |
+| **R** (Reference) | Template de referência sem transiente | 900–2000 ADU |
+| **D** (Difference) | D(x,y) = S − R via subtração ZOGY | −50 a +50 ADU |
+| **Scorr** | Scorr(x,y) = D / σ_D — mapa de razão sinal/ruído | −3 a +8 σ |
+
+Os **bounding boxes** dos candidatos permanecem ancorados via WCS compartilhado entre todas as camadas.
 
 ---
 
@@ -130,6 +190,7 @@ space-findx/
 - ✅ Catálogo astrométrico: **Gaia EDR3** (precisão ~0.02 mas)
 - ✅ Saída em formato **ADES XML** compatível com o esquema `submit.xsd` (MPC/IAU 2017)
 - ✅ Política de privacidade PII: nomes pessoais **nunca** devem aparecer em campos `<comment>` do XML
+- ✅ Thumbnails FITS via **`mmap=True`** + binning + **`ZScaleInterval`** para prevenção de MemoryError
 
 ---
 
@@ -146,6 +207,7 @@ Veja o [Manual de Usuário](MANUAL.md) para a descrição detalhada de cada par�
 O pipeline gera na pasta de saída:
 
 - `ades_submission_YYYY-MM-DD_OBS.xml` — Submissão no padrão MPC/ADES
+- `science_YYYY-MM-DD_diff.fits` — Imagem de diferença FITS com WCS preservado
 - Logs com timestamps de cada etapa
 
 ---
