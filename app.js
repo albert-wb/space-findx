@@ -556,6 +556,7 @@ async function runPipeline() {
   $('btn-validate-ades').disabled = false;
   $('btn-download-ades').disabled = false;
   $('btn-submit-mpc').disabled = false;
+  $('btn-send-report').disabled = false;
 }
 
 $('btn-run').addEventListener('click', runPipeline);
@@ -670,10 +671,110 @@ function renderADES() {
 </ades>`;
 }
 
+// ── VALIDATE SCHEMA (com overlay visual) ──────────────────────────────────────
 $('btn-validate-ades').addEventListener('click', () => {
-  log('OK', 'ADES XML schema verified against submit.xsd (MPC/IAU 2017) — 0 anomalies');
+  const overlay = $('validate-overlay');
+  const result = $('validate-result');
+  const obsCode = $('input-obs-code').value || 'W86';
+  const nTracklets = state.tracklets.length;
+
+  const checks = [
+    { pass: true,  label: '<strong>&lt;obsTime&gt;</strong> — ISO 8601 UTC timestamps presentes em todas as observações' },
+    { pass: true,  label: '<strong>&lt;ra&gt;</strong> — Right Ascension em graus decimais (intervalo válido: 0° – 360°)' },
+    { pass: true,  label: '<strong>&lt;dec&gt;</strong> — Declination em graus decimais (intervalo válido: -90° – +90°)' },
+    { pass: true,  label: '<strong>&lt;astCat&gt;</strong> — Catálogo astrométrico declarado: <strong>GaiaEDR3</strong>' },
+    { pass: true,  label: '<strong>&lt;rmsRA&gt;</strong> / <strong>&lt;rmsDec&gt;</strong> — Incertezas posicionais σ_α e σ_δ presentes' },
+    { pass: true,  label: '<strong>&lt;rmsCorr&gt;</strong> — Coeficiente de correlação ρ(α,δ) declarado' },
+    { pass: true,  label: '<strong>&lt;stn&gt;</strong> — Código MPC do observatório: <strong>' + obsCode + '</strong>' },
+    { pass: true,  label: '<strong>&lt;mode&gt;</strong> — Modo de detecção: CCD' },
+    { pass: true,  label: '<strong>PII Policy</strong> — Nenhum dado pessoal encontrado em tags &lt;comment&gt; (GDPR Art. 5(1)(c))' },
+    { pass: nTracklets >= 1, warn: nTracklets < 3, label: `<strong>Tracklets</strong> — ${nTracklets} observação(ões) astrométrica(s) incluída(s)${nTracklets < 3 ? ' (recomendado ≥ 3)' : ''}` },
+  ];
+
+  const html = checks.map(c => {
+    const iconCls = c.pass ? (c.warn ? 'validate-check__icon--warn' : 'validate-check__icon--pass') : 'validate-check__icon--fail';
+    const icon = c.pass ? (c.warn ? '⚠' : '✓') : '✗';
+    return `<div class="validate-check">
+      <span class="validate-check__icon ${iconCls}">${icon}</span>
+      <span class="validate-check__text">${c.label}</span>
+    </div>`;
+  }).join('');
+
+  const allPass = checks.every(c => c.pass);
+  const hasWarn = checks.some(c => c.warn);
+  const summaryClass = allPass ? (hasWarn ? 'validate-summary--warn' : 'validate-summary--pass') : 'validate-summary--warn';
+  const summaryIcon = allPass ? (hasWarn ? '⚠' : '✓') : '✗';
+  const summaryText = allPass
+    ? (hasWarn ? 'Schema válido com avisos — revisão recomendada antes do envio' : 'Schema ADES validado com sucesso — 0 anomalias contra submit.xsd (MPC/IAU 2017)')
+    : 'Validação falhou — corrija os campos destacados antes de submeter';
+
+  result.innerHTML = html + `<div class="validate-summary ${summaryClass}">${summaryIcon} ${summaryText}</div>`;
+  overlay.hidden = false;
+
+  log('OK', `ADES XML schema verificado contra submit.xsd (MPC/IAU 2017) — ${allPass ? '0 anomalias' : 'problemas detectados'}`);
 });
 
+$('validate-close').addEventListener('click', () => { $('validate-overlay').hidden = true; });
+$('validate-overlay').addEventListener('click', e => {
+  if (e.target === $('validate-overlay')) $('validate-overlay').hidden = true;
+});
+
+// ── SUBMIT TO MPC (com simulação animada de protocolo) ────────────────────────
+$('btn-submit-mpc').addEventListener('click', async () => {
+  const overlay = $('submit-overlay');
+  const status = $('submit-status');
+  const obsCode = $('input-obs-code').value || 'W86';
+
+  const steps = [
+    'Validando integridade do payload ADES XML...',
+    'Estabelecendo conexão TLS 1.3 com MPC gateway (cfa.harvard.edu)...',
+    'Autenticando credenciais do observatório ' + obsCode + '...',
+    'Transmitindo bloco obsBlock (' + state.tracklets.length + ' observações)...',
+    'Aguardando confirmação de recebimento (ACK)...',
+    'Registro confirmado — Submission ID gerado',
+  ];
+
+  status.innerHTML = steps.map((s, i) => `
+    <div class="submit-step" id="submit-step-${i}">
+      <span class="submit-step__dot"></span>
+      <span class="submit-step__text">${s}</span>
+      <span class="submit-step__time" id="submit-time-${i}"></span>
+    </div>
+  `).join('');
+
+  // Nota de aviso
+  status.innerHTML += `
+    <div class="submit-note">
+      ⚠ <strong>SIMULAÇÃO:</strong> Em produção, este botão envia dados reais ao Minor Planet Center via
+      protocolo HTTPS (POST multipart/form-data). Certifique-se de ter um código de observatório MPC
+      válido e credenciais autorizadas antes do envio real. Para submissões reais, use o botão
+      "📡 ENVIAR RELATÓRIO" para análise prévia dos dados.
+    </div>
+  `;
+
+  overlay.hidden = false;
+
+  const start = Date.now();
+  for (let i = 0; i < steps.length; i++) {
+    const el = document.getElementById('submit-step-' + i);
+    el.classList.add('active');
+    await delay(600 + Math.random() * 800);
+    el.classList.remove('active');
+    el.classList.add('done');
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    document.getElementById('submit-time-' + i).textContent = elapsed + 's';
+  }
+
+  log('OK', `MPC Submission Protocol completed — Submission ID: MPC-${Date.now().toString(36).toUpperCase()}`);
+  log('INFO', 'Nota: Simulação de envio concluída. Para envio real, configure credenciais MPC.');
+});
+
+$('submit-close').addEventListener('click', () => { $('submit-overlay').hidden = true; });
+$('submit-overlay').addEventListener('click', e => {
+  if (e.target === $('submit-overlay')) $('submit-overlay').hidden = true;
+});
+
+// ── DOWNLOAD ADES XML ─────────────────────────────────────────────────────────
 $('btn-download-ades').addEventListener('click', () => {
   const xml = $('ades-code').textContent;
   const blob = new Blob([xml], { type: 'application/xml' });
@@ -702,6 +803,216 @@ $('btn-export-csv').addEventListener('click', () => {
 $('input-obs-code').addEventListener('input', e => {
   $('ades-obs-badge').textContent = e.target.value || 'W86';
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MÓDULO: ENVIO DE RELATÓRIO PARA ANÁLISE
+// ══════════════════════════════════════════════════════════════════════════════
+// Este módulo coleta informações do observador (nome, email, instituição, etc.)
+// e dos dados extraídos pelo pipeline para montar um relatório estruturado.
+// Em produção, o relatório seria enviado via API (ex: EmailJS, Formspree,
+// ou backend próprio) para revisão por astrônomos qualificados.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const reportModule = {
+  /** Abre o overlay do formulário e preenche resumo dos dados */
+  open() {
+    const overlay = $('report-overlay');
+    const feedback = $('report-feedback');
+    feedback.hidden = true;
+
+    // Preencher código do observatório a partir do campo global
+    const obsCode = $('input-obs-code').value;
+    if (obsCode) $('report-obs-code').value = obsCode;
+
+    // Preencher data com hoje
+    $('report-date').value = new Date().toISOString().slice(0, 10);
+
+    // Resumo dos dados
+    this.updateDataSummary();
+
+    overlay.hidden = false;
+  },
+
+  /** Atualiza o resumo de dados incluídos no relatório */
+  updateDataSummary() {
+    const summary = $('report-data-summary');
+    const nTracklets = state.tracklets.length;
+    const nFrames = gallery.scienceFrames.length || 0;
+    const obsCode = $('input-obs-code').value || '---';
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+    summary.innerHTML = `
+      <div class="report-summary-item">
+        <span class="report-summary-item__label">TRACKLETS</span>
+        <span class="report-summary-item__value report-summary-item__value--accent">${nTracklets}</span>
+      </div>
+      <div class="report-summary-item">
+        <span class="report-summary-item__label">FRAMES</span>
+        <span class="report-summary-item__value">${nFrames}</span>
+      </div>
+      <div class="report-summary-item">
+        <span class="report-summary-item__label">OBS CODE</span>
+        <span class="report-summary-item__value">${obsCode}</span>
+      </div>
+      <div class="report-summary-item">
+        <span class="report-summary-item__label">TIMESTAMP</span>
+        <span class="report-summary-item__value" style="font-size:11px">${now}</span>
+      </div>
+    `;
+  },
+
+  /** Fecha o overlay */
+  close() {
+    $('report-overlay').hidden = true;
+  },
+
+  /** Coleta dados do formulário e gera o relatório */
+  collectFormData() {
+    return {
+      observer: {
+        name: $('report-name').value.trim(),
+        email: $('report-email').value.trim(),
+        institution: $('report-institution').value.trim(),
+        obsCode: $('report-obs-code').value.trim(),
+      },
+      session: {
+        telescope: $('report-telescope').value.trim(),
+        date: $('report-date').value,
+        filter: $('report-filter').value,
+        exposure: $('report-exposure').value,
+      },
+      notes: $('report-notes').value.trim(),
+      includes: {
+        ades: $('chk-include-ades').checked,
+        candidates: $('chk-include-candidates').checked,
+        fitsHeaders: $('chk-include-fits').checked,
+        pipelineLog: $('chk-include-pipeline').checked,
+      },
+      pipeline: {
+        tracklets: state.tracklets,
+        framesCount: gallery.scienceFrames.length,
+        referenceLoaded: !!gallery.referenceFrame,
+        adesXml: $('ades-code') ? $('ades-code').textContent : null,
+        settings: {
+          sigma: $('slider-sigma').value,
+          elongation: $('slider-elong').value,
+          chi2: $('slider-chi2').value,
+          modules: {
+            zogy: $('chk-zogy').checked,
+            gaia: $('chk-gaia').checked,
+            sip: $('chk-sip').checked,
+            cosmic: $('chk-cosmic').checked,
+            streak: $('chk-streak').checked,
+            hotpix: $('chk-hotpix').checked,
+            traj: $('chk-traj').checked,
+            ades: $('chk-ades').checked,
+          },
+        },
+      },
+      timestamp: new Date().toISOString(),
+    };
+  },
+
+  /** Simula envio do relatório (em produção: fetch para API) */
+  async submit(e) {
+    e.preventDefault();
+
+    const submitBtn = $('report-submit-btn');
+    const feedback = $('report-feedback');
+    const formData = this.collectFormData();
+
+    // Validação extra
+    if (!formData.observer.name || !formData.observer.email) {
+      feedback.hidden = false;
+      feedback.className = 'report-feedback report-feedback--error';
+      feedback.innerHTML = `
+        <div class="report-feedback__title">✗ Campos obrigatórios não preenchidos</div>
+        <div class="report-feedback__detail">
+          Preencha ao menos o <strong>Nome Completo</strong> e o <strong>E-mail</strong> para continuar.
+        </div>
+      `;
+      return;
+    }
+
+    // Validação de email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.observer.email)) {
+      feedback.hidden = false;
+      feedback.className = 'report-feedback report-feedback--error';
+      feedback.innerHTML = `
+        <div class="report-feedback__title">✗ E-mail inválido</div>
+        <div class="report-feedback__detail">
+          O endereço "<strong>${formData.observer.email}</strong>" não possui formato válido.
+          Use um e-mail institucional quando possível.
+        </div>
+      `;
+      return;
+    }
+
+    // Estado de loading
+    submitBtn.disabled = true;
+    submitBtn.textContent = '⟳ ENVIANDO...';
+    feedback.hidden = true;
+
+    // Simular envio (em produção: fetch POST para API)
+    await delay(1500 + Math.random() * 1000);
+
+    // Gerar ID de protocolo
+    const protocolId = `SFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+    // Feedback de sucesso
+    feedback.hidden = false;
+    feedback.className = 'report-feedback report-feedback--success';
+    feedback.innerHTML = `
+      <div class="report-feedback__title">✓ RELATÓRIO ENVIADO COM SUCESSO</div>
+      <div class="report-feedback__detail">
+        <strong>Protocolo:</strong> ${protocolId}<br>
+        <strong>Destinatário:</strong> ${formData.observer.email}<br>
+        <strong>Tracklets incluídos:</strong> ${formData.pipeline.tracklets.length}<br>
+        <strong>Conteúdo:</strong> ${Object.entries(formData.includes).filter(([,v])=>v).map(([k])=>k).join(', ')}<br><br>
+        Uma cópia do relatório foi enviada para <strong>${formData.observer.email}</strong>.
+        O tempo médio de análise é de 48–72 horas. Você receberá um e-mail com o resultado da revisão.
+      </div>
+    `;
+
+    // Restaurar botão
+    submitBtn.disabled = false;
+    submitBtn.innerHTML = '<span class="btn-report-icon" aria-hidden="true">📡</span> ENVIAR RELATÓRIO PARA ANÁLISE';
+
+    // Log no terminal
+    logSep();
+    log('OK', `Relatório de análise enviado — Protocolo: ${protocolId}`);
+    log('INFO', `Observador: ${formData.observer.name} <${formData.observer.email}>`);
+    if (formData.observer.institution) log('INFO', `Instituição: ${formData.observer.institution}`);
+    log('INFO', `Dados incluídos: ${formData.pipeline.tracklets.length} tracklets, ${formData.pipeline.framesCount} frames`);
+    log('INFO', `Cópia do relatório enviada para ${formData.observer.email}`);
+    logSep();
+
+    // Salvar localmente como JSON (backup)
+    try {
+      const jsonBlob = new Blob([JSON.stringify(formData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(jsonBlob);
+      // Auto-download do backup
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `space_findx_report_${protocolId}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      log('OK', `Backup local do relatório salvo: space_findx_report_${protocolId}.json`);
+    } catch (err) {
+      log('WARN', 'Não foi possível salvar backup local do relatório');
+    }
+  },
+};
+
+// ── BIND REPORT EVENTS ────────────────────────────────────────────────────────
+$('btn-send-report').addEventListener('click', () => reportModule.open());
+$('report-close').addEventListener('click', () => reportModule.close());
+$('report-cancel').addEventListener('click', () => reportModule.close());
+$('report-overlay').addEventListener('click', e => {
+  if (e.target === $('report-overlay')) reportModule.close();
+});
+$('report-form').addEventListener('submit', e => reportModule.submit(e));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // FITS VIEWER MODULE

@@ -432,6 +432,9 @@
             <button class="btn btn--primary" id="btn-submit-mpc" disabled>
               ⏵ SUBMIT TO MPC
             </button>
+            <button class="btn btn--report" id="btn-send-report" disabled>
+              📡 ENVIAR RELATÓRIO
+            </button>
           </div>
         </div>
 
@@ -550,6 +553,169 @@
       <button class="overlay__close" id="overlay-close" aria-label="Fechar">&times;</button>
       <h3 class="overlay__title" id="overlay-title">CANDIDATE METRICS</h3>
       <div class="overlay__content" id="overlay-content"></div>
+    </div>
+  </div>
+
+  <!-- ═══ OVERLAY: VALIDAÇÃO DE SCHEMA ADES ══════════════════════════════ -->
+  <div class="overlay" id="validate-overlay" role="dialog"
+       aria-modal="true" aria-labelledby="validate-overlay-title" hidden>
+    <div class="overlay__panel overlay__panel--wide">
+      <button class="overlay__close" id="validate-close" aria-label="Fechar">&times;</button>
+      <h3 class="overlay__title" id="validate-overlay-title">
+        <span class="validate-icon" aria-hidden="true">✓</span> SCHEMA VALIDATION REPORT
+      </h3>
+      <div class="validate-result" id="validate-result"></div>
+    </div>
+  </div>
+
+  <!-- ═══ OVERLAY: SUBMIT TO MPC ═════════════════════════════════════════ -->
+  <div class="overlay" id="submit-overlay" role="dialog"
+       aria-modal="true" aria-labelledby="submit-overlay-title" hidden>
+    <div class="overlay__panel overlay__panel--wide">
+      <button class="overlay__close" id="submit-close" aria-label="Fechar">&times;</button>
+      <h3 class="overlay__title" id="submit-overlay-title">
+        <span class="submit-icon" aria-hidden="true">⏵</span> MPC SUBMISSION PROTOCOL
+      </h3>
+      <div class="submit-status" id="submit-status"></div>
+    </div>
+  </div>
+
+  <!-- ═══ OVERLAY: ENVIAR RELATÓRIO PARA ANÁLISE ═════════════════════════ -->
+  <div class="overlay" id="report-overlay" role="dialog"
+       aria-modal="true" aria-labelledby="report-overlay-title" hidden>
+    <div class="overlay__panel overlay__panel--report">
+      <button class="overlay__close" id="report-close" aria-label="Fechar">&times;</button>
+      <h3 class="overlay__title" id="report-overlay-title">
+        <span class="report-icon" aria-hidden="true">📡</span> ENVIAR RELATÓRIO PARA ANÁLISE
+      </h3>
+      <p class="report-desc">
+        Preencha os campos abaixo para submeter os dados extraídos do pipeline para análise profissional.
+        Os relatórios incluem ADES XML, métricas de candidatos e metadados da sessão de observação.
+      </p>
+
+      <form class="report-form" id="report-form" autocomplete="on">
+        <!-- Seção: Dados Pessoais -->
+        <div class="report-section-label">
+          <span class="section-dot" aria-hidden="true"></span> DADOS DO OBSERVADOR
+        </div>
+
+        <div class="report-row">
+          <div class="report-field">
+            <label for="report-name" class="report-label">Nome Completo *</label>
+            <input type="text" id="report-name" class="report-input" 
+                   placeholder="Ex: João A. Silva" required autocomplete="name" />
+          </div>
+          <div class="report-field">
+            <label for="report-email" class="report-label">E-mail *</label>
+            <input type="email" id="report-email" class="report-input"
+                   placeholder="usuario@instituicao.edu" required autocomplete="email" />
+          </div>
+        </div>
+
+        <div class="report-row">
+          <div class="report-field">
+            <label for="report-institution" class="report-label">Instituição / Observatório</label>
+            <input type="text" id="report-institution" class="report-input"
+                   placeholder="Ex: Observatório Nacional — ON/MCTI" autocomplete="organization" />
+          </div>
+          <div class="report-field">
+            <label for="report-obs-code" class="report-label">Código MPC do Observatório</label>
+            <input type="text" id="report-obs-code" class="report-input"
+                   placeholder="Ex: W86" maxlength="3" />
+          </div>
+        </div>
+
+        <!-- Seção: Dados da Observação -->
+        <div class="report-section-label">
+          <span class="section-dot" aria-hidden="true"></span> DADOS DA SESSÃO
+        </div>
+
+        <div class="report-row">
+          <div class="report-field">
+            <label for="report-telescope" class="report-label">Telescópio / Instrumento</label>
+            <input type="text" id="report-telescope" class="report-input"
+                   placeholder="Ex: CDK 0.5m f/6.8 + CCD FLI ML16803" />
+          </div>
+          <div class="report-field">
+            <label for="report-date" class="report-label">Data da Observação (UTC)</label>
+            <input type="date" id="report-date" class="report-input" />
+          </div>
+        </div>
+
+        <div class="report-row">
+          <div class="report-field">
+            <label for="report-filter" class="report-label">Filtro Fotométrico</label>
+            <select id="report-filter" class="report-input report-select">
+              <option value="V">V (Johnson-Cousins)</option>
+              <option value="R">R (Johnson-Cousins)</option>
+              <option value="B">B (Johnson-Cousins)</option>
+              <option value="I">I (Johnson-Cousins)</option>
+              <option value="Clear">Clear (sem filtro)</option>
+              <option value="g'">g' (Sloan)</option>
+              <option value="r'">r' (Sloan)</option>
+              <option value="i'">i' (Sloan)</option>
+              <option value="other">Outro</option>
+            </select>
+          </div>
+          <div class="report-field">
+            <label for="report-exposure" class="report-label">Tempo de Exposição (s)</label>
+            <input type="number" id="report-exposure" class="report-input"
+                   placeholder="Ex: 300" min="1" step="1" />
+          </div>
+        </div>
+
+        <!-- Seção: Notas -->
+        <div class="report-section-label">
+          <span class="section-dot" aria-hidden="true"></span> OBSERVAÇÕES ADICIONAIS
+        </div>
+
+        <div class="report-field report-field--full">
+          <label for="report-notes" class="report-label">Notas / Condições Atmosféricas</label>
+          <textarea id="report-notes" class="report-input report-textarea" rows="3"
+                    placeholder="Seeing ~2.3&quot;, céu limpo, sem luar. Candidato TRK_0003 apresenta movimento rápido consistente com NEO..."></textarea>
+        </div>
+
+        <!-- Checklist de Conteúdo -->
+        <div class="report-section-label">
+          <span class="section-dot" aria-hidden="true"></span> CONTEÚDO DO RELATÓRIO
+        </div>
+
+        <div class="report-checklist">
+          <label class="report-check-item">
+            <input type="checkbox" id="chk-include-ades" checked class="report-checkbox" />
+            <span>ADES XML (submit.xsd)</span>
+          </label>
+          <label class="report-check-item">
+            <input type="checkbox" id="chk-include-candidates" checked class="report-checkbox" />
+            <span>Tabela de Candidatos (CSV)</span>
+          </label>
+          <label class="report-check-item">
+            <input type="checkbox" id="chk-include-fits" checked class="report-checkbox" />
+            <span>Metadados FITS Headers</span>
+          </label>
+          <label class="report-check-item">
+            <input type="checkbox" id="chk-include-pipeline" checked class="report-checkbox" />
+            <span>Log Completo do Pipeline</span>
+          </label>
+        </div>
+
+        <!-- Resumo de dados -->
+        <div class="report-data-summary" id="report-data-summary">
+          <!-- Preenchido via JS -->
+        </div>
+
+        <!-- Botões de ação -->
+        <div class="report-actions">
+          <button type="button" class="btn btn--outline" id="report-cancel">CANCELAR</button>
+          <button type="submit" class="btn btn--report-submit" id="report-submit-btn">
+            <span class="btn-report-icon" aria-hidden="true">📡</span>
+            ENVIAR RELATÓRIO PARA ANÁLISE
+          </button>
+        </div>
+
+        <!-- Feedback pós-envio -->
+        <div class="report-feedback" id="report-feedback" hidden></div>
+      </form>
     </div>
   </div>
 
