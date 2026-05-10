@@ -1,21 +1,25 @@
 # ◈ SPACE-FINDX — Manual do Usuário
 
-> **Versão:** 1.0 | **Última atualização:** 2026-05
+> **Versão:** 1.1 | **Última atualização:** 2026-05-10
 
 ---
 
 ## Sumário
 
 1. [Introdução](#1-introdução)
-2. [Interface Gráfica](#2-interface-gráfica)
-3. [Preparando os Dados de Entrada](#3-preparando-os-dados-de-entrada)
-4. [Parâmetros do Pipeline](#4-parâmetros-do-pipeline)
-5. [Etapas do Pipeline](#5-etapas-do-pipeline)
-6. [Interpretando os Resultados](#6-interpretando-os-resultados)
-7. [Exportação ADES e Submissão ao MPC](#7-exportação-ades-e-submissão-ao-mpc)
-8. [Configuração Avançada (YAML)](#8-configuração-avançada-yaml)
-9. [Uso via Linha de Comando (Headless)](#9-uso-via-linha-de-comando-headless)
-10. [Erros Comuns e Soluções](#10-erros-comuns-e-soluções)
+2. [Interface Gráfica Web](#2-interface-gráfica-web)
+3. [Seletor Visual de Frames (Gallery View)](#3-seletor-visual-de-frames-gallery-view)
+4. [Gerenciamento de Saída (Output Directory)](#4-gerenciamento-de-saída-output-directory)
+5. [FITS Viewer — Camadas de Redução](#5-fits-viewer--camadas-de-redução)
+6. [Preparando os Dados de Entrada](#6-preparando-os-dados-de-entrada)
+7. [Parâmetros do Pipeline](#7-parâmetros-do-pipeline)
+8. [Etapas do Pipeline](#8-etapas-do-pipeline)
+9. [Interpretando os Resultados](#9-interpretando-os-resultados)
+10. [Exportação ADES e Submissão ao MPC](#10-exportação-ades-e-submissão-ao-mpc)
+11. [Configuração Avançada (YAML)](#11-configuração-avançada-yaml)
+12. [Uso via Linha de Comando (Headless)](#12-uso-via-linha-de-comando-headless)
+13. [Interface Desktop (CustomTkinter)](#13-interface-desktop-customtkinter)
+14. [Erros Comuns e Soluções](#14-erros-comuns-e-soluções)
 
 ---
 
@@ -49,7 +53,7 @@ Frames FITS brutos
 
 ---
 
-## 2. Interface Gráfica
+## 2. Interface Gráfica Web
 
 Abra o arquivo `index.html` em um navegador moderno (Chrome, Firefox, Edge). A interface é dividida em três áreas:
 
@@ -57,19 +61,20 @@ Abra o arquivo `index.html` em um navegador moderno (Chrome, Firefox, Edge). A i
 
 | Seção | Função |
 |---|---|
-| **INPUT TARGET** | Carrega os frames de ciência e o frame de referência |
-| **OUTPUT DIR** | Define o diretório de saída para o XML e logs |
-| **PARÂMETROS** | Ativa/desativa módulos do pipeline |
-| **LIMIARES** | Ajusta os limiares de detecção e trajetória |
-| **INICIAR PIPELINE** | Executa o pipeline completo |
+| **DATA INGESTION** | Gallery View com thumbnails dos frames de ciência e referência (ver Seção 3) |
+| **OUTPUT DIRECTORY** | Define diretório de saída + indicadores de subprodutos ADES/diff (ver Seção 4) |
+| **PIPELINE MODULES** | Ativa/desativa módulos individuais do pipeline |
+| **THRESHOLDS** | Ajusta limiares de detecção σ, elongação e χ² reduzido |
+| **INITIALIZE PIPELINE** | Executa o pipeline completo |
 
-### Área Central — Visualização
+### Área Central — Visualização (4 abas)
 
 | Aba | Conteúdo |
 |---|---|
-| **LOG DO PROCESSO** | Terminal em tempo real com todas as mensagens do pipeline |
-| **CANDIDATOS DETECTADOS** | Tabela de NEOs/transientes com coordenadas, velocidade angular e χ² |
-| **ADES XML** | Pré-visualização e download do arquivo de submissão ao MPC |
+| **[T] SYSTEM LOGS** | Terminal em tempo real com todas as mensagens + diagrama de fluxo dos módulos |
+| **[C] CANDIDATES** | Tabela interativa de NEOs/transientes (click = detalhes, double-click = FITS Viewer) |
+| **[X] ADES XML** | Pré-visualização com syntax highlighting + validação de schema + download |
+| **[F] FITS VIEWER** | Visualizador astrométrico com 4 camadas de redução S/R/D/Scorr (ver Seção 5) |
 
 ### Barra Inferior — Status
 
@@ -77,7 +82,92 @@ Exibe o estado atual do pipeline, o arquivo carregado e o progresso percentual.
 
 ---
 
-## 3. Preparando os Dados de Entrada
+## 3. Seletor Visual de Frames (Gallery View)
+
+Os frames FITS de ciência e referência são apresentados em uma **galeria de thumbnails** em vez de uma lista de texto.
+
+### Estratégia de geração de thumbnails
+
+```
+fits.open(filepath, mmap=True)       ← Memory-mapped I/O (não carrega em RAM)
+        │
+   data[::8, ::8]                    ← Binning 8×8 (lê apenas 1/64 dos bytes)
+        │
+   ZScaleInterval().get_limits()     ← Rejeita raios cósmicos e saturação
+        │
+   thumbnail normalizado             ← Renderizado como Canvas 64×64
+```
+
+### Justificativa técnica
+
+- **`mmap=True`**: Arquivos FITS de CCDs (4096×4096 float64) ocupam ~128 MB cada. O `mmap` usa I/O mapeado em memória do SO, lendo blocos sob demanda sem carregar o arquivo inteiro em RAM. Sem isso, abrir 12+ frames simultaneamente causa `MemoryError` em workstations de 8–16 GB.
+
+- **Binning 8×8**: O slicing `data[::8, ::8]` reduz um frame 4096×4096 para 512×512, consumindo apenas 2 MB em vez de 128 MB. A perda de resolução é aceitável para thumbnails de pré-visualização.
+
+- **`ZScaleInterval`** (Fitzpatrick 1999): Amostra ~600 pixels aleatórios, ordena e rejeita os 5% extremos (raios cósmicos + blooming). Sem este passo, um único raio cósmico de 60000 ADU domina o range dinâmico inteiro e todas as fontes astronômicas (1000–2000 ADU) aparecem como pretas — fenômeno chamado "cegueira dinâmica".
+
+### Interação
+
+- **Click** em um thumbnail: alterna seleção (ativo/inativo para o pipeline)
+- O contador exibe `N/M frames` selecionados
+- Frames desabilitados não entram no processamento
+
+---
+
+## 4. Gerenciamento de Saída (Output Directory)
+
+O botão **"SET OUTPUT DIRECTORY"** abre um file dialog para selecionar a pasta destino.
+
+O pipeline salva **obrigatoriamente** dois subprodutos neste diretório:
+
+| Subproduto | Formato | Descrição |
+|---|---|---|
+| `ades_submission_YYYY-MM-DD_<obs>.xml` | XML ADES IAU 2017 | Relatório astrométrico para submissão ao MPC |
+| `science_YYYY-MM-DD_diff.fits` | FITS PrimaryHDU | Imagem de diferença com **header WCS integralmente preservado** |
+
+O status de cada subproduto é exibido na sidebar como **PENDING** (antes do pipeline) ou **SAVED** (após conclusão).
+
+> **Nota:** O header WCS do `_diff.fits` é uma cópia integral do science frame original. Isso garante que a transformação pixel→sky funcione na imagem de diferença sem necessidade de recalibração astrométrica.
+
+---
+
+## 5. FITS Viewer — Camadas de Redução
+
+O FITS Viewer (aba **[F]**) permite visualizar a imagem astrométrica com controles interativos.
+
+### Camadas de renderização
+
+Os botões **S / R / D / Scorr** na barra de controles alternam entre 4 camadas:
+
+| Botão | Camada | Conteúdo | Range típico |
+|---|---|---|---|
+| **S** | Science | Imagem CCD calibrada: B + Σ_estrelas + Σ_NEO + CR + N(0,σ_s) | 900–2000 ADU |
+| **R** | Reference | Template sem transiente: B + Σ_estrelas + N(0,σ_r) | 900–2000 ADU |
+| **D** | Difference | D(x,y) = S(x,y) − R(x,y) via ZOGY. Estrelas cancelam, NEO persiste. | −50 a +50 ADU |
+| **Scorr** | Significance | Scorr(x,y) = D(x,y) / σ_D — mapa S/N. Detecções reais: >5σ | −3 a +8 σ |
+
+### Ancoragem WCS dos bounding boxes
+
+Ao alternar camada, os **bounding boxes dos candidatos permanecem fixos** na mesma posição. Isso ocorre porque:
+
+1. As coordenadas do candidato são derivadas do centróide medido na imagem S
+2. O WCS é **compartilhado** entre todas as camadas (mesmo header copiado)
+3. A transformação `pixel_to_world()` → `world_to_pixel()` retorna o mesmo pixel em S, R, D e Scorr
+
+### Controles adicionais
+
+| Controle | Função |
+|---|---|
+| **Contrast** | ZScale (padrão), μ±kσ (sigma clipping), Linear |
+| **Colormap** | Grayscale, Heat, Viridis, Inverted |
+| **Zoom** | Scroll do mouse (centrado no cursor) |
+| **Pan** | Arrastar com mouse |
+| **Reset / Full** | Restaura zoom ou ajusta à viewport |
+| **Coordenadas** | Barra inferior mostra RA, Dec, pixel (x,y) e valor ADU em tempo real |
+
+---
+
+## 6. Preparando os Dados de Entrada
 
 ### Frames de Ciência
 
@@ -115,7 +205,7 @@ O pipeline lê os seguintes campos do cabeçalho FITS:
 
 ---
 
-## 4. Parâmetros do Pipeline
+## 7. Parâmetros do Pipeline
 
 ### Parâmetros on/off
 
@@ -141,7 +231,7 @@ O pipeline lê os seguintes campos do cabeçalho FITS:
 
 ---
 
-## 5. Etapas do Pipeline
+## 8. Etapas do Pipeline
 
 ### Etapa 1 — Calibração CCD
 
@@ -201,7 +291,7 @@ Implementa o método **Proper Image Subtraction** (Zackay, Ofek & Gal-Yam 2016):
 
 ---
 
-## 6. Interpretando os Resultados
+## 9. Interpretando os Resultados
 
 ### Tabela de Candidatos
 
@@ -229,7 +319,7 @@ Implementa o método **Proper Image Subtraction** (Zackay, Ofek & Gal-Yam 2016):
 
 ---
 
-## 7. Exportação ADES e Submissão ao MPC
+## 10. Exportação ADES e Submissão ao MPC
 
 ### O que é ADES?
 
@@ -253,7 +343,7 @@ O **Astrometry Data Exchange Standard (ADES)** é o formato oficial da IAU para 
 
 ---
 
-## 8. Configuração Avançada (YAML)
+## 11. Configuração Avançada (YAML)
 
 O arquivo `config/pipeline_config.yaml` permite configuração detalhada de cada módulo:
 
@@ -300,7 +390,7 @@ export:
 
 ---
 
-## 9. Uso via Linha de Comando (Headless)
+## 12. Uso via Linha de Comando (Headless)
 
 Para uso em servidores ou scripts automatizados:
 
@@ -364,7 +454,33 @@ for noite in sorted(base.glob("20??-??-??")):
 
 ---
 
-## 10. Erros Comuns e Soluções
+## 13. Interface Desktop (CustomTkinter)
+
+Além da interface web, o projeto inclui uma GUI desktop baseada em `CustomTkinter` + `matplotlib`:
+
+```bash
+python run_pipeline.py
+```
+
+A interface desktop possui as mesmas 4 abas, com o FITS Viewer utilizando:
+
+- **`matplotlib`** com `projection=wcs` para projeção astrométrica nativa
+- **`astropy.wcs.WCS`** para coordenadas celestes reais (não simuladas)
+- **`fits.open(mmap=True)`** para gerenciamento de memória em frames grandes
+- **`astropy.visualization.ZScaleInterval`** para contraste adaptativo
+- Vinculação de eventos `<<TreeviewSelect>>` da tabela de candidatos ao destaque com `Rectangle` no viewer
+
+Arquivos relevantes:
+
+| Arquivo | Conteúdo |
+|---|---|
+| `gui/main_window.py` | Janela principal com 4 abas (CustomTkinter) |
+| `gui/fits_viewer.py` | Widget FITS Viewer (matplotlib + astropy.wcs) |
+| `gui/__init__.py` | Exports do pacote |
+
+---
+
+## 14. Erros Comuns e Soluções
 
 | Erro / Sintoma | Causa Provável | Solução |
 |---|---|---|
