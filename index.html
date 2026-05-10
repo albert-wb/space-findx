@@ -35,35 +35,57 @@
     <!-- ════════════════════════════════════════════════════ LEFT SIDEBAR -->
     <aside class="sidebar" role="complementary" aria-label="Painel de Controle">
 
-      <!-- ─── SEÇÃO 1: INPUT TARGET ────────────────────────────────────── -->
+      <!-- ─── SEÇÃO 1: INPUT TARGET — GALLERY VIEW ─────────────────────── -->
       <section class="sidebar__section" aria-labelledby="input-target-title">
         <h2 class="sidebar__section-title" id="input-target-title">
           <span class="section-icon" aria-hidden="true">▸</span> DATA INGESTION
         </h2>
 
-        <div class="drop-zone" id="drop-zone-science" role="button"
-             tabindex="0" aria-label="Carregar diretório de frames de ciência FITS">
-          <span class="drop-zone__icon" aria-hidden="true">◬</span>
-          <span class="drop-zone__text" id="science-label">Science Frames (.fits)</span>
-          <span class="drop-zone__hint">Select or drop directory</span>
+        <!-- Science Frames: Gallery View -->
+        <div class="gallery-section">
+          <div class="gallery-header">
+            <span class="gallery-label">◬ Science Frames</span>
+            <span class="gallery-count" id="science-count">0 frames</span>
+          </div>
+          <div class="gallery-grid" id="gallery-science" role="listbox"
+               aria-label="Thumbnails dos frames de ciência">
+            <div class="gallery-empty" id="gallery-science-empty">
+              <span class="gallery-empty-icon">◬</span>
+              <span>Click to load .fits</span>
+            </div>
+          </div>
+          <button class="btn btn--outline btn--full btn--sm" id="btn-load-science">
+            + LOAD SCIENCE FRAMES
+          </button>
         </div>
 
-        <div class="drop-zone drop-zone--secondary" id="drop-zone-ref" role="button"
-             tabindex="0" aria-label="Carregar frame de referência FITS">
-          <span class="drop-zone__icon" aria-hidden="true">◎</span>
-          <span class="drop-zone__text" id="ref-label">Reference Frame (.fits)</span>
-          <span class="drop-zone__hint">Required for ZOGY Subtraction</span>
+        <!-- Reference Frame: Gallery View -->
+        <div class="gallery-section" style="margin-top:12px">
+          <div class="gallery-header">
+            <span class="gallery-label">◎ Reference Frame</span>
+            <span class="gallery-count" id="ref-count">0 frames</span>
+          </div>
+          <div class="gallery-grid gallery-grid--single" id="gallery-ref" role="listbox"
+               aria-label="Thumbnail do frame de referência">
+            <div class="gallery-empty" id="gallery-ref-empty">
+              <span class="gallery-empty-icon">◎</span>
+              <span>Required for ZOGY</span>
+            </div>
+          </div>
+          <button class="btn btn--outline btn--full btn--sm" id="btn-load-ref">
+            + LOAD REFERENCE FRAME
+          </button>
         </div>
 
-        <div class="calibration-row">
+        <div class="calibration-row" style="margin-top:10px">
           <button class="btn btn--ghost btn--sm" id="btn-bias" title="Carregar Bias Mestre">BIAS</button>
           <button class="btn btn--ghost btn--sm" id="btn-dark" title="Carregar Dark Mestre">DARK</button>
           <button class="btn btn--ghost btn--sm" id="btn-flat" title="Carregar Flat Mestre">FLAT</button>
         </div>
-        <p class="sidebar__hint">Master calibration frames (optional but highly recommended for astrometry).</p>
+        <p class="sidebar__hint">Master calibration frames (optional). Thumbnails use 8×8 binning + ZScale to prevent MemoryError.</p>
       </section>
 
-      <!-- ─── SEÇÃO 2: OUTPUT DIR ──────────────────────────────────────── -->
+      <!-- ─── SEÇÃO 2: OUTPUT DIR + SUBPRODUCTS ────────────────────────── -->
       <section class="sidebar__section" aria-labelledby="output-dir-title">
         <h2 class="sidebar__section-title" id="output-dir-title">
           <span class="section-icon" aria-hidden="true">▸</span> OUTPUT DIRECTORY
@@ -73,8 +95,21 @@
           <span class="output-path__text" id="output-path-text">~/space-findx/output</span>
         </div>
         <button class="btn btn--outline btn--full" id="btn-output-dir">
-          CHOOSE DIRECTORY...
+          SET OUTPUT DIRECTORY
         </button>
+        <!-- Subprodutos obrigatórios -->
+        <div class="output-products">
+          <div class="output-product" id="output-ades">
+            <span class="output-product__dot">○</span>
+            <span class="output-product__name">ADES Submission (.xml)</span>
+            <span class="output-product__status" id="output-ades-status">PENDING</span>
+          </div>
+          <div class="output-product" id="output-diff">
+            <span class="output-product__dot">○</span>
+            <span class="output-product__name">Difference Image (_diff.fits)</span>
+            <span class="output-product__status" id="output-diff-status">PENDING</span>
+          </div>
+        </div>
       </section>
 
       <!-- ─── SEÇÃO 3: PARÂMETROS DO PIPELINE ──────────────────────────── -->
@@ -435,6 +470,14 @@
         <div class="fits-header">
           <h2 class="results-title">Astrometric FITS Preview</h2>
           <div class="fits-controls">
+            <!-- Seletor de Camada de Redução -->
+            <div class="fits-layer-selector" role="radiogroup" aria-label="Camada de renderização">
+              <button class="fits-layer-btn fits-layer-btn--active" data-layer="science" title="Science Image (calibrada)">S</button>
+              <button class="fits-layer-btn" data-layer="reference" title="Reference Image (template)">R</button>
+              <button class="fits-layer-btn" data-layer="difference" title="Difference Image (D = S - R)">D</button>
+              <button class="fits-layer-btn" data-layer="scorr" title="Significance Map (Scorr = S/N)">Scorr</button>
+            </div>
+            <span class="fits-sep">│</span>
             <label class="fits-control-label" for="fits-contrast">Contrast:</label>
             <select id="fits-contrast" class="fits-select">
               <option value="zscale" selected>ZScale</option>
@@ -455,6 +498,7 @@
 
         <div class="fits-info-bar" id="fits-info-bar">
           <span class="ades-tag"><span id="fits-filename">No file loaded</span></span>
+          <span class="ades-tag">Layer: <span id="fits-layer-label" class="fits-layer-active-label">SCIENCE</span></span>
           <span class="ades-tag">Dims: <span id="fits-dims">—</span></span>
           <span class="ades-tag">Contrast: <span id="fits-vmin">—</span> / <span id="fits-vmax">—</span></span>
           <span class="ades-tag">Cursor: <span id="fits-cursor-pos">—</span></span>
