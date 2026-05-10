@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>⌖ SPACE-FINDX · Astrometry & Transients</title>
+  <meta name="description" content="Pipeline astrométrico de alta precisão para detecção de transientes e Objetos Próximos da Terra (NEOs). ZOGY subtraction · Gaia EDR3 · ADES Export." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════ TOP BAR -->
+  <header class="topbar" role="banner">
+    <div class="topbar__left">
+      <span class="topbar__icon" aria-hidden="true">⌖</span>
+      <span class="topbar__title">SPACE<span>-</span>FINDX</span>
+      <span class="topbar__version">v1.0</span>
+      <span class="topbar__divider" aria-hidden="true">|</span>
+      <span class="topbar__subtitle">Astrometry & NEO Detection Pipeline</span>
+    </div>
+    <div class="topbar__right">
+      <span class="status-badge" id="status-badge" role="status" aria-live="polite">
+        <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+        <span id="status-text">SYS_STANDBY</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════════════════════════════ MAIN LAYOUT -->
+  <main class="layout" role="main">
+
+    <!-- ════════════════════════════════════════════════════ LEFT SIDEBAR -->
+    <aside class="sidebar" role="complementary" aria-label="Painel de Controle">
+
+      <!-- ─── SEÇÃO 1: INPUT TARGET ────────────────────────────────────── -->
+      <section class="sidebar__section" aria-labelledby="input-target-title">
+        <h2 class="sidebar__section-title" id="input-target-title">
+          <span class="section-icon" aria-hidden="true">▸</span> DATA INGESTION
+        </h2>
+
+        <div class="drop-zone" id="drop-zone-science" role="button"
+             tabindex="0" aria-label="Carregar diretório de frames de ciência FITS">
+          <span class="drop-zone__icon" aria-hidden="true">◬</span>
+          <span class="drop-zone__text" id="science-label">Science Frames (.fits)</span>
+          <span class="drop-zone__hint">Select or drop directory</span>
+        </div>
+
+        <div class="drop-zone drop-zone--secondary" id="drop-zone-ref" role="button"
+             tabindex="0" aria-label="Carregar frame de referência FITS">
+          <span class="drop-zone__icon" aria-hidden="true">◎</span>
+          <span class="drop-zone__text" id="ref-label">Reference Frame (.fits)</span>
+          <span class="drop-zone__hint">Required for ZOGY Subtraction</span>
+        </div>
+
+        <div class="calibration-row">
+          <button class="btn btn--ghost btn--sm" id="btn-bias" title="Carregar Bias Mestre">BIAS</button>
+          <button class="btn btn--ghost btn--sm" id="btn-dark" title="Carregar Dark Mestre">DARK</button>
+          <button class="btn btn--ghost btn--sm" id="btn-flat" title="Carregar Flat Mestre">FLAT</button>
+        </div>
+        <p class="sidebar__hint">Master calibration frames (optional but highly recommended for astrometry).</p>
+      </section>
+
+      <!-- ─── SEÇÃO 2: OUTPUT DIR ──────────────────────────────────────── -->
+      <section class="sidebar__section" aria-labelledby="output-dir-title">
+        <h2 class="sidebar__section-title" id="output-dir-title">
+          <span class="section-icon" aria-hidden="true">▸</span> OUTPUT DIRECTORY
+        </h2>
+        <div class="output-path-row">
+          <span class="output-path__icon" aria-hidden="true">📁</span>
+          <span class="output-path__text" id="output-path-text">~/space-findx/output</span>
+        </div>
+        <button class="btn btn--outline btn--full" id="btn-output-dir">
+          CHOOSE DIRECTORY...
+        </button>
+      </section>
+
+      <!-- ─── SEÇÃO 3: PARÂMETROS DO PIPELINE ──────────────────────────── -->
+      <section class="sidebar__section" aria-labelledby="pipeline-params-title">
+        <h2 class="sidebar__section-title" id="pipeline-params-title">
+          <span class="section-icon" aria-hidden="true">▸</span> PIPELINE MODULES
+        </h2>
+
+        <div class="param-list" role="list">
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-zogy" checked class="param-checkbox" />
+            <span class="param-label">ZOGY Diff Image Analysis</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-gaia" checked class="param-checkbox" />
+            <span class="param-label">Gaia EDR3 Refinement</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-sip" checked class="param-checkbox" />
+            <span class="param-label">SIP Poly Distortion (n=3)</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-cosmic" checked class="param-checkbox" />
+            <span class="param-label">L.A.Cosmic Ray Rejection</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-streak" checked class="param-checkbox" />
+            <span class="param-label">Morphological Streak Filter</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-hotpix" checked class="param-checkbox" />
+            <span class="param-label">σ-clip Hot Pixel Mask</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-traj" checked class="param-checkbox" />
+            <span class="param-label">Tracklet Linkage (N≥3)</span>
+            <span class="param-badge active">ON</span>
+          </label>
+          <label class="param-item" role="listitem">
+            <input type="checkbox" id="chk-ades" checked class="param-checkbox" />
+            <span class="param-label">ADES XML Export (IAU)</span>
+            <span class="param-badge active">ON</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- ─── SEÇÃO 4: LIMIARES ────────────────────────────────────────── -->
+      <section class="sidebar__section" aria-labelledby="thresholds-title">
+        <h2 class="sidebar__section-title" id="thresholds-title">
+          <span class="section-icon" aria-hidden="true">▸</span> THRESHOLDS
+        </h2>
+
+        <div class="threshold-control">
+          <div class="threshold-row">
+            <label for="slider-sigma" class="threshold-label">Detection Limit (σ)</label>
+            <span class="threshold-value" id="sigma-value">5.0σ</span>
+          </div>
+          <input type="range" id="slider-sigma" class="slider" min="3" max="10" step="0.5" value="5"
+                 aria-label="Limiar de detecção em sigma" />
+        </div>
+
+        <div class="threshold-control">
+          <div class="threshold-row">
+            <label for="slider-elong" class="threshold-label">Max Elongation (a/b)</label>
+            <span class="threshold-value" id="elong-value">2.0×</span>
+          </div>
+          <input type="range" id="slider-elong" class="slider" min="1" max="5" step="0.1" value="2"
+                 aria-label="Elongação máxima para rejeição de satélites" />
+        </div>
+
+        <div class="threshold-control">
+          <div class="threshold-row">
+            <label for="slider-chi2" class="threshold-label">Linearity χ²_red</label>
+            <span class="threshold-value" id="chi2-value">3.0</span>
+          </div>
+          <input type="range" id="slider-chi2" class="slider" min="1" max="10" step="0.5" value="3"
+                 aria-label="Limiar de chi-quadrado reduzido para trajetória linear" />
+        </div>
+
+        <div class="threshold-control">
+          <div class="threshold-row">
+            <label for="input-obs-code" class="threshold-label">MPC Observatory Code</label>
+          </div>
+          <input type="text" id="input-obs-code" class="text-input" maxlength="3"
+                 placeholder="e.g. W86" aria-label="Código do observatório MPC (3 caracteres)" />
+        </div>
+      </section>
+
+      <!-- ─── BOTÃO PRINCIPAL ──────────────────────────────────────────── -->
+      <button class="btn btn--full btn--launch" id="btn-run"
+              aria-label="Iniciar análise do pipeline">
+        <span class="btn-launch__icon" aria-hidden="true">⏵</span>
+        INITIALIZE PIPELINE
+      </button>
+
+    </aside>
+
+    <!-- ════════════════════════════════════════════════════ CONTENT AREA -->
+    <section class="content" aria-label="Área Principal">
+
+      <!-- ─── ABAS ─────────────────────────────────────────────────────── -->
+      <nav class="tabs" role="tablist" aria-label="Visualização de resultados">
+        <button class="tab tab--active" id="tab-log" role="tab"
+                aria-selected="true" aria-controls="panel-log">
+          [T] SYSTEM LOGS
+        </button>
+        <button class="tab" id="tab-results" role="tab"
+                aria-selected="false" aria-controls="panel-results">
+          [C] CANDIDATES
+        </button>
+        <button class="tab" id="tab-ades" role="tab"
+                aria-selected="false" aria-controls="panel-ades">
+          [X] ADES XML
+        </button>
+        <button class="tab" id="tab-fits" role="tab"
+                aria-selected="false" aria-controls="panel-fits">
+          [F] FITS VIEWER
+        </button>
+      </nav>
+
+      <!-- ─── PAINEL: LOG DO PROCESSO ──────────────────────────────────── -->
+      <div class="panel" id="panel-log" role="tabpanel" aria-labelledby="tab-log">
+
+        <!-- Stats rápidas no topo -->
+        <div class="stats-bar" aria-label="Estatísticas do pipeline">
+          <div class="stat-item">
+            <span class="stat-label">RAW FRAMES</span>
+            <span class="stat-value" id="stat-frames">–</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">DETECTIONS</span>
+            <span class="stat-value" id="stat-detections">–</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">TRACKLETS</span>
+            <span class="stat-value" id="stat-candidates">–</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">VALID NEOs</span>
+            <span class="stat-value stat-value--accent" id="stat-neos">–</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">WCS RMS (")</span>
+            <span class="stat-value" id="stat-rms">–</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">EXEC TIME</span>
+            <span class="stat-value" id="stat-time">–</span>
+          </div>
+        </div>
+
+        <!-- Terminal de Log -->
+        <div class="terminal" id="terminal-log" role="log"
+             aria-label="Terminal de saída do pipeline" aria-live="polite">
+          <div class="terminal__header">
+            <span class="terminal__dot terminal__dot--red" aria-hidden="true"></span>
+            <span class="terminal__dot terminal__dot--yellow" aria-hidden="true"></span>
+            <span class="terminal__dot terminal__dot--green" aria-hidden="true"></span>
+            <span class="terminal__title">space-findx / var/log / process.log</span>
+            <button class="terminal__clear" id="btn-clear-log" aria-label="Limpar log">CLEAR</button>
+          </div>
+          <div class="terminal__body" id="terminal-body">
+            <div class="log-line">
+              <span class="log-prefix">[INIT]</span>
+              <span class="log-msg log-msg--system">
+                ⌖ SPACE-FINDX Astrometric Pipeline v1.0 — Boot Sequence Complete
+              </span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix">[INFO]</span>
+              <span class="log-msg">
+                Loaded modules: calibration · astrometry · subtraction · detection · trajectory · ades_exporter
+              </span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix">[INFO]</span>
+              <span class="log-msg">
+                Waiting for FITS data ingestion...
+              </span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix">[WARN]</span>
+              <span class="log-msg log-msg--warn">
+                OpenCV detected in environment: restricted for subtraction calculations (violates noise distribution)
+              </span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix log-prefix--ok">[OK]</span>
+              <span class="log-msg log-msg--ok">
+                numpy.fft validated as backend for ZOGY proper image subtraction
+              </span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix log-prefix--ok">[OK]</span>
+              <span class="log-msg log-msg--ok">
+                CCDData unit=adu · dtype=float64 constraints enforced
+              </span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix">[INFO]</span>
+              <span class="log-msg">
+                Reference Catalog: <span class="log-accent">Gaia EDR3</span> · Precision baseline: ~0.02 mas
+              </span>
+            </div>
+            <div class="log-line log-line--separator">
+              <span>─────────────────────────────────────────────────────────────────</span>
+            </div>
+            <div class="log-line">
+              <span class="log-prefix">[SYS]</span>
+              <span class="log-msg log-msg--system">System ready. Awaiting telemetry parameters and execution command.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pipeline visual de etapas -->
+        <div class="pipeline-steps" aria-label="Etapas do pipeline">
+          <div class="step" id="step-1" data-step="1">
+            <div class="step__icon" aria-hidden="true">⌬</div>
+            <div class="step__label">CALIBRATION</div>
+            <div class="step__sublabel">bias · dark · flat</div>
+            <div class="step__status" id="step-1-status">IDLE</div>
+          </div>
+          <div class="step__arrow" aria-hidden="true">→</div>
+          <div class="step" id="step-2" data-step="2">
+            <div class="step__icon" aria-hidden="true">⌖</div>
+            <div class="step__label">ASTROMETRY</div>
+            <div class="step__sublabel">WCS · Gaia · SIP</div>
+            <div class="step__status" id="step-2-status">IDLE</div>
+          </div>
+          <div class="step__arrow" aria-hidden="true">→</div>
+          <div class="step" id="step-3" data-step="3">
+            <div class="step__icon" aria-hidden="true">◬</div>
+            <div class="step__label">SUBTRACTION</div>
+            <div class="step__sublabel">ZOGY · Scorr · FFT</div>
+            <div class="step__status" id="step-3-status">IDLE</div>
+          </div>
+          <div class="step__arrow" aria-hidden="true">→</div>
+          <div class="step" id="step-4" data-step="4">
+            <div class="step__icon" aria-hidden="true">⦾</div>
+            <div class="step__label">DETECTION</div>
+            <div class="step__sublabel">DAO · morphol filter</div>
+            <div class="step__status" id="step-4-status">IDLE</div>
+          </div>
+          <div class="step__arrow" aria-hidden="true">→</div>
+          <div class="step" id="step-5" data-step="5">
+            <div class="step__icon" aria-hidden="true">↗</div>
+            <div class="step__label">TRAJECTORY</div>
+            <div class="step__sublabel">linkage · χ² fit</div>
+            <div class="step__status" id="step-5-status">IDLE</div>
+          </div>
+          <div class="step__arrow" aria-hidden="true">→</div>
+          <div class="step" id="step-6" data-step="6">
+            <div class="step__icon" aria-hidden="true">▤</div>
+            <div class="step__label">ADES EXPORT</div>
+            <div class="step__sublabel">XML · MPC 2017</div>
+            <div class="step__status" id="step-6-status">IDLE</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ─── PAINEL: CANDIDATOS DETECTADOS ────────────────────────────── -->
+      <div class="panel panel--hidden" id="panel-results"
+           role="tabpanel" aria-labelledby="tab-results">
+        <div class="results-header">
+          <h2 class="results-title">Validated NEO / Transient Candidates</h2>
+          <div class="results-filters">
+            <button class="filter-btn filter-btn--active" id="filter-all">ALL</button>
+            <button class="filter-btn" id="filter-confirmed">CONFIRMED</button>
+            <button class="filter-btn" id="filter-rejected">REJECTED</button>
+          </div>
+          <button class="btn btn--outline" id="btn-export-csv">⬇ EXPORT CSV</button>
+        </div>
+
+        <div class="table-wrapper" role="region" aria-label="Tabela de candidatos">
+          <table class="results-table" id="results-table">
+            <thead>
+              <tr>
+                <th scope="col">TRK_ID</th>
+                <th scope="col">α (RA) J2000</th>
+                <th scope="col">δ (Dec) J2000</th>
+                <th scope="col">μ_α ("/hr)</th>
+                <th scope="col">μ_δ ("/hr)</th>
+                <th scope="col">χ²_red</th>
+                <th scope="col">σ_RA (")</th>
+                <th scope="col">σ_Dec (")</th>
+                <th scope="col">FRAMES</th>
+                <th scope="col">STATUS</th>
+              </tr>
+            </thead>
+            <tbody id="results-tbody">
+              <tr class="results-table__empty">
+                <td colspan="10">
+                  <span class="empty-icon" aria-hidden="true">⌖</span>
+                  <span>No data available. Initialize pipeline to populate metrics.</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ─── PAINEL: ADES XML ─────────────────────────────────────────── -->
+      <div class="panel panel--hidden" id="panel-ades"
+           role="tabpanel" aria-labelledby="tab-ades">
+        <div class="ades-header">
+          <h2 class="results-title">ADES Submission Data (IAU 2017)</h2>
+          <div class="ades-actions">
+            <button class="btn btn--outline" id="btn-validate-ades" disabled>
+              ✓ VALIDATE SCHEMA
+            </button>
+            <button class="btn btn--outline" id="btn-download-ades" disabled>
+              ⬇ SAVE XML
+            </button>
+            <button class="btn btn--primary" id="btn-submit-mpc" disabled>
+              ⏵ SUBMIT TO MPC
+            </button>
+          </div>
+        </div>
+
+        <div class="ades-info-bar">
+          <span class="ades-tag">Schema: submit.xsd (ADES 2017)</span>
+          <span class="ades-tag">Ref Catalog: <span id="ades-cat-badge">GaiaEDR3</span></span>
+          <span class="ades-tag">PII Policy: <span class="ades-tag--ok">STRICT/PROTECTED</span></span>
+          <span class="ades-tag">Obs Code: <span id="ades-obs-badge">---</span></span>
+        </div>
+
+        <pre class="ades-preview" id="ades-preview"
+             aria-label="Pré-visualização do XML ADES"><code id="ades-code">&lt;!-- Pipeline requires execution to generate ADES payload --&gt;
+
+&lt;!--
+  ADES: Astrometry Data Exchange Standard
+  MPC/IAU - Version 2017
+
+  Required Schema Tags (submit.xsd):
+    &lt;obsTime&gt;  — ISO 8601 UTC
+    &lt;ra&gt;       — Right Ascension (decimal degrees)
+    &lt;dec&gt;      — Declination (decimal degrees)
+    &lt;astCat&gt;   — Astrometric Catalog
+    &lt;rmsRA&gt;    — Positional uncertainty σ_α (arcsec)
+    &lt;rmsDec&gt;   — Positional uncertainty σ_δ (arcsec)
+    &lt;rmsCorr&gt;  — Correlation coefficient ρ(α,δ)
+
+  Privacy Protocol (PII):
+    Personal names MUST NOT appear in &lt;comment&gt; tags.
+    (MPC Privacy Policy 2019 · GDPR Art. 5(1)(c) Compliance)
+--&gt;</code></pre>
+      </div>
+
+      <!-- ─── PAINEL: FITS VIEWER (ASTROMETRIC PREVIEW) ──────────────── -->
+      <div class="panel panel--hidden" id="panel-fits"
+           role="tabpanel" aria-labelledby="tab-fits">
+        <div class="fits-header">
+          <h2 class="results-title">Astrometric FITS Preview</h2>
+          <div class="fits-controls">
+            <label class="fits-control-label" for="fits-contrast">Contrast:</label>
+            <select id="fits-contrast" class="fits-select">
+              <option value="zscale" selected>ZScale</option>
+              <option value="sigma">μ ± kσ</option>
+              <option value="linear">Linear</option>
+            </select>
+            <label class="fits-control-label" for="fits-cmap">Colormap:</label>
+            <select id="fits-cmap" class="fits-select">
+              <option value="gray" selected>Grayscale</option>
+              <option value="heat">Heat</option>
+              <option value="viridis">Viridis</option>
+              <option value="inverted">Inverted</option>
+            </select>
+            <button class="btn btn--outline btn--sm" id="btn-fits-reset" title="Reset Zoom">⟲ RESET</button>
+            <button class="btn btn--outline btn--sm" id="btn-fits-fullview" title="Visão Completa">⊞ FULL</button>
+          </div>
+        </div>
+
+        <div class="fits-info-bar" id="fits-info-bar">
+          <span class="ades-tag"><span id="fits-filename">No file loaded</span></span>
+          <span class="ades-tag">Dims: <span id="fits-dims">—</span></span>
+          <span class="ades-tag">Contrast: <span id="fits-vmin">—</span> / <span id="fits-vmax">—</span></span>
+          <span class="ades-tag">Cursor: <span id="fits-cursor-pos">—</span></span>
+        </div>
+
+        <div class="fits-viewport" id="fits-viewport">
+          <canvas id="fits-canvas" class="fits-canvas"></canvas>
+          <div class="fits-placeholder" id="fits-placeholder">
+            <span class="empty-icon" aria-hidden="true">⌖</span>
+            <span>No FITS data loaded</span>
+            <span class="fits-placeholder-hint">Run pipeline or click a candidate to preview detection field</span>
+          </div>
+          <!-- Overlay SVG para bounding boxes -->
+          <svg id="fits-overlay" class="fits-overlay"></svg>
+        </div>
+
+        <!-- Barra de coordenadas WCS -->
+        <div class="fits-coord-bar" id="fits-coord-bar">
+          <span class="fits-coord">RA: <span id="fits-ra">—</span></span>
+          <span class="fits-coord">Dec: <span id="fits-dec">—</span></span>
+          <span class="fits-coord">Pixel: (<span id="fits-px">—</span>, <span id="fits-py">—</span>)</span>
+          <span class="fits-coord">Value: <span id="fits-val">—</span> ADU</span>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <!-- ═══════════════════════════════════════════════════════ BOTTOM BAR -->
+  <footer class="bottombar" role="contentinfo">
+    <div class="bottombar__left">
+      <span class="bottombar__status" id="bottombar-status">SYS_READY</span>
+      <span class="bottombar__sep" aria-hidden="true">|</span>
+      <span class="bottombar__info" id="bottombar-info">No files ingested</span>
+    </div>
+    <div class="bottombar__right">
+      <span class="bottombar__progress-label" id="progress-label">0%</span>
+      <div class="progress-bar" role="progressbar" aria-valuenow="0"
+           aria-valuemin="0" aria-valuemax="100" aria-label="Progresso do pipeline">
+        <div class="progress-bar__fill" id="progress-fill"></div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Overlay de detalhes do candidato -->
+  <div class="overlay" id="candidate-overlay" role="dialog"
+       aria-modal="true" aria-labelledby="overlay-title" hidden>
+    <div class="overlay__panel">
+      <button class="overlay__close" id="overlay-close" aria-label="Fechar">&times;</button>
+      <h3 class="overlay__title" id="overlay-title">CANDIDATE METRICS</h3>
+      <div class="overlay__content" id="overlay-content"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

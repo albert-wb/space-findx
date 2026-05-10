@@ -1,0 +1,12 @@
+astropy>=5.3.0
+astropy-healpix>=0.7
+photutils>=1.9.0
+numpy>=1.24.0
+ccdproc>=2.4.0
+astroquery>=0.4.6
+reproject>=0.11.0
+pyyaml>=6.0
+scipy>=1.11.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+customtkinter>=5.2.0

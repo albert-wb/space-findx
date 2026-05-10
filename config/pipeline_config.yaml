@@ -1,0 +1,42 @@
+# pipeline_config.yaml
+# Configuração do pipeline space-findx
+# Todos os parâmetros podem ser sobrescritos pela interface gráfica
+
+calibration:
+  master_bias: null           # Caminho para o bias mestre .fits
+  master_dark: null           # Caminho para o dark mestre .fits
+  master_flat: null           # Caminho para o flat mestre .fits
+  hot_pixel_sigma: 5.0        # Limiar sigma para hot pixels
+  gain: 1.5                   # Ganho do detector (e-/ADU)
+  read_noise: 8.0             # Ruído de leitura (e-)
+
+astrometry:
+  sip_order: 3                # Ordem do polinômio SIP (2-4 recomendado)
+  match_radius_arcsec: 2.0    # Raio de correspondência Gaia (arcseg)
+  min_stars: 10               # Mínimo de estrelas para WCS válido
+  rms_threshold_arcsec: 0.5   # RMS máximo aceitável (arcseg)
+
+subtraction:
+  reg_epsilon: 1.0e-10        # Regularização ZOGY (evita div/0)
+  psf_fwhm_pixels: 3.0        # FWHM da PSF para Gaussiana analítica
+
+detection:
+  significance_threshold: 5.0 # Limiar de detecção (sigma)
+  fwhm_pixels: 3.0             # FWHM para DAOStarFinder
+  sharpness_min: 0.2
+  sharpness_max: 1.0
+  roundness_max: 1.0
+  max_elongation: 2.0          # Razão eixo maior/menor máxima
+
+trajectory:
+  min_frames: 3                # Mínimo de frames para confirmar objeto
+  max_speed_arcsec_hr: 7200.0  # Velocidade angular máxima ("/hr)
+  max_chi2_reduced: 3.0        # Limiar de linearidade da trajetória
+  position_sigma_arcsec: 0.3   # Incerteza posicional para chi2
+
+export:
+  obs_code: "W86"              # Código MPC do observatório (3 chars)
+  telescope_aperture_m: 0.5   # Abertura do telescópio (metros)
+  telescope_desc: "0.5m f/8 Ritchey-Chretien"
+  astrometric_catalog: "GaiaEDR3"
+  submitter_code: "W86"       # Código do submetente (institucional, não nome)
