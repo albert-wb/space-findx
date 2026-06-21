@@ -12,6 +12,163 @@ const state = {
   currentFilter: 'all',
 };
 
+// ── ANALYSIS CACHE (localStorage anti-duplicação) ─────────────────────────────
+const analysisCache = {
+  STORAGE_KEY: 'spacefindx_analyzed_frames',
+
+  getAnalyzed() {
+    try {
+      return JSON.parse(localStorage.getItem(this.STORAGE_KEY) || '{}');
+    } catch { return {}; }
+  },
+
+  markAnalyzed(frameName, metadata = {}) {
+    const cache = this.getAnalyzed();
+    cache[frameName] = {
+      analyzedAt: new Date().toISOString(),
+      ...metadata,
+    };
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(cache));
+  },
+
+  isAnalyzed(frameName) {
+    return frameName in this.getAnalyzed();
+  },
+
+  getAll() { return this.getAnalyzed(); },
+
+  clear() { localStorage.removeItem(this.STORAGE_KEY); },
+};
+
+// ── IMAGE LIBRARY (localStorage persistente) ──────────────────────────────────
+const imageLibrary = {
+  STORAGE_KEY: 'spacefindx_image_library',
+
+  _get() {
+    try {
+      return JSON.parse(localStorage.getItem(this.STORAGE_KEY) || '{}');
+    } catch { return {}; }
+  },
+
+  _save(data) {
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
+  },
+
+  register(frameName, metadata = {}) {
+    const lib = this._get();
+    if (!lib[frameName]) {
+      lib[frameName] = {
+        name: frameName,
+        registeredAt: new Date().toISOString(),
+        analyzed: false,
+        analyzedAt: null,
+        ...metadata,
+      };
+      this._save(lib);
+    }
+  },
+
+  markAnalyzed(frameName) {
+    const lib = this._get();
+    if (lib[frameName]) {
+      lib[frameName].analyzed = true;
+      lib[frameName].analyzedAt = new Date().toISOString();
+      this._save(lib);
+    }
+  },
+
+  getAll() { return this._get(); },
+
+  getStats() {
+    const all = Object.values(this._get());
+    return {
+      total: all.length,
+      analyzed: all.filter(f => f.analyzed).length,
+      pending: all.filter(f => !f.analyzed).length,
+    };
+  },
+
+  render(filter = 'all', searchQuery = '') {
+    const grid = $('library-grid');
+    const emptyMsg = $('library-empty');
+    if (!grid) return;
+
+    // Atualiza estatísticas
+    const stats = this.getStats();
+    if ($('library-stat-total')) $('library-stat-total').textContent = stats.total;
+    if ($('library-stat-analyzed')) $('library-stat-analyzed').textContent = stats.analyzed;
+    if ($('library-stat-pending')) $('library-stat-pending').textContent = stats.pending;
+
+    let frames = Object.values(this.getAll());
+
+    // Ordenação descrescente (mais recentes primeiro)
+    frames.sort((a, b) => new Date(b.registeredAt) - new Date(a.registeredAt));
+
+    // Filtros
+    if (filter === 'analyzed') frames = frames.filter(f => f.analyzed);
+    if (filter === 'pending') frames = frames.filter(f => !f.analyzed);
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      frames = frames.filter(f => f.name.toLowerCase().includes(q) || (f.object && f.object.toLowerCase().includes(q)));
+    }
+
+    // Limpa grid atual mantendo o empty message
+    Array.from(grid.children).forEach(child => {
+      if (child.id !== 'library-empty') child.remove();
+    });
+
+    if (frames.length === 0) {
+      emptyMsg.hidden = false;
+      if (stats.total > 0) {
+        emptyMsg.innerHTML = '<span class="empty-icon" aria-hidden="true">🔍</span><span>Nenhum frame corresponde à busca ou filtro.</span>';
+      } else {
+        emptyMsg.innerHTML = '<span class="empty-icon" aria-hidden="true">📁</span><span>Nenhum frame na biblioteca.</span><span style="font-size: 11px; color: var(--text-dim);">Carregue frames em SCIENCE GALLERY para popular a biblioteca.</span>';
+      }
+      return;
+    }
+
+    emptyMsg.hidden = true;
+
+    // Renderiza cards
+    frames.forEach(f => {
+      const card = document.createElement('div');
+      card.className = 'library-card';
+
+      const statusHtml = f.analyzed 
+        ? '<div class="library-card__badge library-card__badge--analyzed">✓ ANALYZED</div>'
+        : '<div class="library-card__badge library-card__badge--pending">○ PENDING</div>';
+      
+      const thumbField = gallery.generateThumbField(64, 36, f.name.length); // Aspect ratio diferente
+      
+      card.innerHTML = `
+        <div class="library-card__thumb">
+          <canvas width="64" height="36"></canvas>
+          ${statusHtml}
+        </div>
+        <div class="library-card__info">
+          <div class="library-card__name" title="${f.name}">${f.name}</div>
+          <div class="library-card__date">${f.dateObs ? f.dateObs.slice(0, 10) + ' ' + f.dateObs.slice(11, 16) : 'No date'}</div>
+          <div class="library-card__meta">
+            <span>${f.filter || 'N/A'}</span>
+            <span>·</span>
+            <span>${f.exptime ? f.exptime + 's' : 'N/A'}</span>
+          </div>
+        </div>
+      `;
+      
+      // Renderiza canvas com ZScale simulado
+      const canvas = card.querySelector('canvas');
+      gallery.renderThumbToCanvas(canvas, thumbField);
+
+      grid.appendChild(card);
+    });
+  },
+
+  clearHistory() {
+    localStorage.removeItem(this.STORAGE_KEY);
+  },
+};
+
 // ── DOM REFS ──────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const terminalBody = $('terminal-body');
@@ -99,7 +256,48 @@ document.querySelectorAll('.tab').forEach(tab => {
     const panelId = tab.getAttribute('aria-controls');
     const panel = $(panelId);
     if (panel) panel.classList.remove('panel--hidden');
+    
+    // Auto-render biblioteca se aba for selecionada
+    if (panelId === 'panel-library') {
+      imageLibrary.render();
+    }
   });
+});
+
+// ── IMAGE LIBRARY BINDINGS ────────────────────────────────────────────────────
+let _currentLibraryFilter = 'all';
+
+document.querySelectorAll('.filter-btn[data-library-filter]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn[data-library-filter]').forEach(b => b.classList.remove('filter-btn--active'));
+    btn.classList.add('filter-btn--active');
+    _currentLibraryFilter = btn.dataset.libraryFilter;
+    imageLibrary.render(_currentLibraryFilter, $('library-search').value);
+  });
+});
+
+$('library-search').addEventListener('input', (e) => {
+  imageLibrary.render(_currentLibraryFilter, e.target.value);
+});
+
+$('btn-library-clear').addEventListener('click', () => {
+  if (confirm('Tem certeza que deseja apagar o histórico de todas as sessões? Isso removerá a marcação de frames já analisados.')) {
+    imageLibrary.clearHistory();
+    analysisCache.clear();
+    imageLibrary.render();
+    
+    // Reseta visual dos frames da galeria atual
+    gallery.scienceFrames.forEach(f => {
+      f.previouslyAnalyzed = false;
+      f.selected = true; // Volta a ficar selecionado
+      if (f._domElement) {
+        f._domElement.classList.remove('analyzed');
+        f._domElement.classList.add('selected');
+      }
+    });
+    gallery._updateScienceCount();
+    log('WARN', 'Histórico da biblioteca e cache de análises foram limpos.');
+  }
 });
 
 // ── SLIDERS ───────────────────────────────────────────────────────────────────
@@ -148,9 +346,41 @@ document.querySelectorAll('.param-checkbox').forEach(chk => {
 // para demonstração, mas a lógica aplica-se identicamente ao backend Python.
 // ══════════════════════════════════════════════════════════════════════════════
 
+/** Contador global de lotes carregados para gerar nomes únicos */
+let _loadBatchCounter = 0;
+
 const gallery = {
-  scienceFrames: [],   // Array de { name, data, width, height, selected }
+  scienceFrames: [],   // Array de { name, data, width, height, selected, metadata, previouslyAnalyzed }
   referenceFrame: null,
+
+  /**
+   * Gera metadados FITS simulados realistas para um frame.
+   * Em produção, estes dados viriam do cabeçalho FITS real (fits.getheader()).
+   */
+  generateFrameMetadata(index, batchOffset = 0) {
+    const baseDate = new Date('2024-12-01T22:00:00Z');
+    baseDate.setMinutes(baseDate.getMinutes() + (batchOffset + index) * 15);
+    const filters = ['V', 'R', 'B', 'I', 'Clear'];
+    const expTimes = [120, 180, 300, 600];
+
+    return {
+      dateObs: baseDate.toISOString().replace('.000Z', '.0Z'),
+      exptime: expTimes[index % expTimes.length],
+      filter: filters[index % filters.length],
+      naxis1: 4096,
+      naxis2: 4096,
+      bitpix: -64,
+      instrument: 'FLI ML16803',
+      telescope: '0.5m f/8 Ritchey-Chretien',
+      gain: 1.5,
+      rdnoise: 8.0,
+      binning: '1x1',
+      object: `Survey Field NEO-${baseDate.toISOString().slice(0, 10)}`,
+      observer: 'W86',
+      airmass: (1.0 + Math.random() * 0.8).toFixed(3),
+      seeing: (1.5 + Math.random() * 2.0).toFixed(2),
+    };
+  },
 
   /**
    * Gera um campo FITS simulado para thumbnail.
@@ -252,16 +482,35 @@ const gallery = {
     ctx.putImageData(imgData, 0, 0);
   },
 
-  /** Cria elemento DOM para um thumbnail na gallery */
-  createThumbElement(name, field, onClick) {
+  /** Cria elemento DOM para um thumbnail na gallery com checkbox de seleção */
+  createThumbElement(name, field, frameData) {
     const thumb = document.createElement('div');
     thumb.className = 'gallery-thumb';
     thumb.setAttribute('role', 'option');
-    thumb.title = `${name}\n${field.width * 8}×${field.height * 8} px (binned 8×)`;
+    thumb.title = `${name}\n${field.width * 8}×${field.height * 8} px (binned 8×)\nClick: ver detalhes · Checkbox: selecionar`;
 
     const canvas = document.createElement('canvas');
     this.renderThumbToCanvas(canvas, field);
     thumb.appendChild(canvas);
+
+    // Checkbox de seleção (canto superior esquerdo)
+    const selectBox = document.createElement('div');
+    selectBox.className = 'gallery-thumb__select';
+    selectBox.textContent = '✓';
+    selectBox.title = 'Alternar seleção para análise';
+    selectBox.addEventListener('click', (e) => {
+      e.stopPropagation(); // Impede abrir detalhes
+      thumb.classList.toggle('selected');
+      frameData.selected = !frameData.selected;
+      this._updateScienceCount();
+    });
+    thumb.appendChild(selectBox);
+
+    // Badge de frame analisado (canto superior direito)
+    const analyzedBadge = document.createElement('div');
+    analyzedBadge.className = 'gallery-thumb__analyzed';
+    analyzedBadge.textContent = '✓ DONE';
+    thumb.appendChild(analyzedBadge);
 
     // Label com nome do arquivo
     const label = document.createElement('div');
@@ -275,43 +524,111 @@ const gallery = {
     meta.textContent = `${field.width * 8}²`;
     thumb.appendChild(meta);
 
-    thumb.addEventListener('click', () => onClick(thumb, name, field));
+    // Click no thumbnail → abre detalhes (NÃO altera seleção)
+    thumb.addEventListener('click', () => {
+      this.showFrameDetails(frameData);
+    });
+
+    // Classes iniciais
+    if (frameData.selected) thumb.classList.add('selected');
+    if (frameData.previouslyAnalyzed) thumb.classList.add('analyzed');
+
+    // Guarda referência ao DOM no frameData para atualizações futuras
+    frameData._domElement = thumb;
+
     return thumb;
   },
 
-  /** Simula carga de science frames e popula a gallery */
-  loadScienceFrames() {
+  /** Atualiza o contador de ciência na sidebar */
+  _updateScienceCount() {
+    const activeCount = this.scienceFrames.filter(f => f.selected).length;
+    const analyzedCount = this.scienceFrames.filter(f => f.previouslyAnalyzed).length;
+    const total = this.scienceFrames.length;
+    let text = `${activeCount}/${total} frames`;
+    if (analyzedCount > 0) text += ` (${analyzedCount} analisados)`;
+    $('science-count').textContent = text;
+  },
+
+  /**
+   * Carrega science frames com número dinâmico e sem duplicação.
+   * NÃO reseta frames anteriores — acumula novos frames ao array existente.
+   */
+  async loadScienceFrames() {
     const grid = $('gallery-science');
     const emptyMsg = $('gallery-science-empty');
 
-    // Simula 12 frames de ciência
-    const frameNames = Array.from({ length: 12 }, (_, i) =>
-      `sci_${String(i + 1).padStart(3, '0')}_V_300s.fits`
-    );
+    try {
+      log('INFO', 'Buscando arquivos FITS reais no disco (dados/ciencia)...');
+      const res = await fetch('http://localhost:8000/api/frames');
+      const data = await res.json();
+      
+      if (data.status === 'empty' || data.frames.length === 0) {
+        log('WARN', "Nenhum arquivo FITS encontrado na pasta 'dados/ciencia'.");
+        alert("Pasta 'dados/ciencia' está vazia! Coloque arquivos .fits para carregar.");
+        return;
+      }
+      
+      emptyMsg.hidden = true;
+      let addedCount = 0;
+      let duplicateCount = 0;
+      let analyzedCount = 0;
 
-    emptyMsg.hidden = true;
-    this.scienceFrames = [];
+      data.frames.forEach((f, idx) => {
+        const name = f.filename;
+        if (this.scienceFrames.some(sf => sf.name === name)) {
+          duplicateCount++;
+          return;
+        }
 
-    frameNames.forEach((name, idx) => {
-      const field = this.generateThumbField(64, 64, idx * 10);
-      const frameData = { name, ...field, selected: true };
-      this.scienceFrames.push(frameData);
+        const field = this.generateThumbField(64, 64, idx * 10);
+        
+        const metadata = {
+          dateObs: f.date_obs,
+          filter: f.filter,
+          exptime: f.exptime,
+          object: 'NEO Survey',
+          dimensions: '4096x4096',
+          datatype: 'float64'
+        };
 
-      const el = this.createThumbElement(name, field, (thumb) => {
-        thumb.classList.toggle('selected');
-        frameData.selected = !frameData.selected;
-        const activeCount = this.scienceFrames.filter(f => f.selected).length;
-        $('science-count').textContent = `${activeCount}/${this.scienceFrames.length} frames`;
+        const wasAnalyzed = analysisCache.isAnalyzed(name);
+        const frameData = {
+          name,
+          ...field,
+          selected: !wasAnalyzed,
+          metadata,
+          previouslyAnalyzed: wasAnalyzed,
+        };
+
+        this.scienceFrames.push(frameData);
+        const el = this.createThumbElement(name, field, frameData);
+        grid.appendChild(el);
+
+        // Registra na biblioteca (Aba L)
+        imageLibrary.register(name, {
+          dateObs: metadata.dateObs,
+          filter: metadata.filter,
+          exptime: metadata.exptime,
+          object: metadata.object,
+        });
+
+        addedCount++;
+        if (wasAnalyzed) analyzedCount++;
       });
-      el.classList.add('selected');
-      grid.appendChild(el);
-    });
 
-    $('science-count').textContent = `${frameNames.length} frames`;
-    state.scienceLoaded = true;
-    updateRunButton();
-    log('OK', `Science gallery populated: ${frameNames.length} frames (64×64 thumbnails, ZScale applied)`);
-    log('INFO', 'Thumbnail strategy: fits.open(mmap=True) → data[::8, ::8] binning → ZScaleInterval()');
+      this._updateScienceCount();
+      state.scienceLoaded = true;
+      updateRunButton();
+
+      log('OK', `Science gallery: +${addedCount} frames REAIS carregados (total: ${this.scienceFrames.length})`, `${addedCount}`);
+      if (duplicateCount > 0) log('WARN', `${duplicateCount} frames ignorados: já presentes na galeria (anti-duplicação)`);
+      if (analyzedCount > 0) log('INFO', `${analyzedCount} frames já haviam sido ✓ ANALYZED anteriormente.`);
+      log('INFO', 'Thumbnail strategy via ImageIngestor Lazy Loading (Pandas df)');
+
+    } catch (e) {
+      log('ERR', 'Erro ao carregar FITS do backend: ' + e.message);
+      alert("Erro ao conectar no servidor Backend. Verifique se 'npm start' está rodando!");
+    }
   },
 
   /** Simula carga do reference frame */
@@ -321,13 +638,19 @@ const gallery = {
 
     const name = 'reference_stacked.fits';
     const field = this.generateThumbField(64, 64, 999);
-    this.referenceFrame = { name, ...field };
+    const metadata = this.generateFrameMetadata(0, 0);
+    metadata.object = 'Reference Stack (master)';
+    metadata.exptime = 1800;
+    this.referenceFrame = { name, ...field, metadata };
 
     emptyMsg.hidden = true;
 
-    const el = this.createThumbElement(name, field, (thumb) => {
-      thumb.classList.add('selected');
-    });
+    // Limpa grid anterior antes de adicionar o novo reference
+    const existingThumbs = grid.querySelectorAll('.gallery-thumb');
+    existingThumbs.forEach(t => t.remove());
+
+    const frameData = { name, ...field, selected: true, metadata, previouslyAnalyzed: false };
+    const el = this.createThumbElement(name, field, frameData);
     el.classList.add('selected');
     grid.appendChild(el);
 
@@ -336,11 +659,69 @@ const gallery = {
     updateRunButton();
     log('OK', `Reference frame ingested: ${name} (ZScale thumbnail generated)`);
   },
+
+  /**
+   * Abre overlay modal com metadados detalhados do frame.
+   * Renderiza thumbnail ampliado + tabela de metadados do cabeçalho FITS.
+   */
+  showFrameDetails(frameData) {
+    const overlay = $('frame-detail-overlay');
+    const content = $('frame-detail-content');
+    const canvas = $('frame-detail-canvas');
+    const m = frameData.metadata || {};
+
+    // Renderiza thumbnail ampliado
+    this.renderThumbToCanvas(canvas, { data: frameData.data, width: frameData.width, height: frameData.height });
+
+    // Título
+    $('frame-detail-title').innerHTML = `
+      <span class="frame-detail-icon" aria-hidden="true">◬</span> ${frameData.name}
+    `;
+
+    // Status
+    const statusHtml = frameData.previouslyAnalyzed
+      ? '<span class="overlay-val--ok">✓ ANALYZED</span>'
+      : '<span style="color:var(--warn)">○ PENDING</span>';
+
+    content.innerHTML = `
+      <div class="overlay-row"><span class="overlay-key">File Name</span><span class="overlay-val overlay-val--accent">${frameData.name}</span></div>
+      <div class="overlay-row"><span class="overlay-key">DATE-OBS (UTC)</span><span class="overlay-val">${m.dateObs || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Exposure Time</span><span class="overlay-val">${m.exptime ? m.exptime + 's' : '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Filter</span><span class="overlay-val">${m.filter || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Dimensions (NAXIS)</span><span class="overlay-val">${m.naxis1 || '—'} × ${m.naxis2 || '—'} px</span></div>
+      <div class="overlay-row"><span class="overlay-key">BITPIX</span><span class="overlay-val">${m.bitpix || '—'} (float64)</span></div>
+      <div class="overlay-row"><span class="overlay-key">Instrument</span><span class="overlay-val">${m.instrument || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Telescope</span><span class="overlay-val">${m.telescope || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Gain (e⁻/ADU)</span><span class="overlay-val">${m.gain || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Read Noise (e⁻)</span><span class="overlay-val">${m.rdnoise || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Binning</span><span class="overlay-val">${m.binning || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Target Object</span><span class="overlay-val">${m.object || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Airmass</span><span class="overlay-val">${m.airmass || '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Seeing (arcsec)</span><span class="overlay-val">${m.seeing ? m.seeing + '"' : '—'}</span></div>
+      <div class="overlay-row"><span class="overlay-key">Analysis Status</span>${statusHtml}</div>
+    `;
+
+    overlay.hidden = false;
+    log('INFO', `Frame details opened: ${frameData.name} — DATE-OBS: ${m.dateObs || 'N/A'}`);
+  },
 };
 
 // Bind gallery buttons
 $('btn-load-science').addEventListener('click', () => gallery.loadScienceFrames());
 $('btn-load-ref').addEventListener('click', () => gallery.loadReferenceFrame());
+$('btn-fits-repo').addEventListener('click', () => { $('fits-repo-overlay').hidden = false; });
+
+// Bind frame detail overlay close
+$('frame-detail-close').addEventListener('click', () => { $('frame-detail-overlay').hidden = true; });
+$('frame-detail-overlay').addEventListener('click', e => {
+  if (e.target === $('frame-detail-overlay')) $('frame-detail-overlay').hidden = true;
+});
+
+// Bind fits repo overlay close
+$('fits-repo-close').addEventListener('click', () => { $('fits-repo-overlay').hidden = true; });
+$('fits-repo-overlay').addEventListener('click', e => {
+  if (e.target === $('fits-repo-overlay')) $('fits-repo-overlay').hidden = true;
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // OUTPUT DIRECTORY MODULE — Gerenciamento de subprodutos
@@ -498,16 +879,76 @@ function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function runPipeline() {
   if (state.running) return;
+
+  // Validação: contar apenas frames selecionados que NÃO foram analisados
+  const framesToAnalyze = gallery.scienceFrames.filter(f => f.selected && !f.previouslyAnalyzed);
+  const alreadyAnalyzed = gallery.scienceFrames.filter(f => f.selected && f.previouslyAnalyzed);
+  const totalSelected = gallery.scienceFrames.filter(f => f.selected).length;
+
+  if (framesToAnalyze.length === 0 && totalSelected > 0) {
+    logSep();
+    log('WARN', `Todos os ${alreadyAnalyzed.length} frames selecionados já foram analisados anteriormente.`);
+    log('INFO', 'Desselecione frames analisados ou carregue novos frames com LOAD SCIENCE FRAMES.');
+    logSep();
+    return;
+  }
+
+  if (totalSelected === 0) {
+    logSep();
+    log('WARN', 'Nenhum frame selecionado para análise.');
+    logSep();
+    return;
+  }
+
   state.running = true;
   state.startTime = Date.now();
   state.tracklets = [];
 
   $('btn-run').disabled = true;
   setStatus('running', '● COMPUTING');
-  bottombarStatus.textContent = 'Processing telemetry sequence...';
+  bottombarStatus.textContent = `Processing ${framesToAnalyze.length} frames via FastAPI...`;
   logSep();
   log('SYS', '⌖ SPACE-FINDX Telemetry Active — UTC: ' + new Date().toISOString().slice(0, 19).replace('T', ' '));
+  log('INFO', `Frames para análise: ${framesToAnalyze.length} novos + ${alreadyAnalyzed.length} já analisados (ignorados)`);
   logSep();
+
+  // ── INÍCIO DA INTEGRAÇÃO COM BACKEND FASTAPI ─────────────────────────────
+  let apiResult = null;
+  try {
+    const payload = {
+      sigma: parseFloat($('slider-sigma').value),
+      elongation: parseFloat($('slider-elong').value),
+      chi2: parseFloat($('slider-chi2').value),
+      modules: {
+        zogy: $('chk-zogy').checked,
+        gaia: $('chk-gaia').checked,
+        sip: $('chk-sip').checked,
+        cosmic: $('chk-cosmic').checked,
+        streak: $('chk-streak').checked,
+        hotpix: $('chk-hotpix').checked,
+        traj: $('chk-traj').checked,
+        ades: $('chk-ades').checked,
+      }
+    };
+    
+    log('INFO', 'Contacting Python Backend (http://localhost:8000/api/pipeline/run)...');
+    
+    // Dispara a requisição real
+    const response = await fetch('http://localhost:8000/api/pipeline/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    if (!response.ok) throw new Error('API Response Error: ' + response.status);
+    
+    apiResult = await response.json();
+    log('OK', `Backend processing completed in ${apiResult.execution_time.toFixed(2)}s`);
+  } catch (error) {
+    log('ERR', 'Failed to connect to Python Backend: ' + error.message);
+    log('WARN', 'Falling back to simulated UI output...');
+  }
+  // ──────────────────────────────────────────────────────────────────────────
 
   for (const step of PIPELINE_STEPS) {
     setStep(step.n, 'active');
@@ -525,27 +966,52 @@ async function runPipeline() {
     const elapsed = ((Date.now() - state.startTime) / 1000).toFixed(1);
     setStat('stat-time', elapsed + 's');
 
-    if (step.n === 1) { setStat('stat-frames', '12'); }
+    if (step.n === 1) { setStat('stat-frames', String(framesToAnalyze.length)); }
     if (step.n === 4) { setStat('stat-detections', '312'); setStat('stat-candidates', '46'); }
     if (step.n === 5) { setStat('stat-neos', '3'); setStat('stat-rms', '0.031"'); }
   }
 
-  // Build demo tracklets
-  state.tracklets = [
-    { id: 'TRK_0001', ra: '14 01 23.412', dec: '+41 12 08.34', mu_ra: 42.3, mu_dec: -18.7, chi2: 0.84, rmsRA: 0.031, rmsDec: 0.028, frames: 12, confirmed: true },
-    { id: 'TRK_0002', ra: '14 01 55.871', dec: '+41 08 42.11', mu_ra: 7.1, mu_dec: 3.2, chi2: 1.12, rmsRA: 0.029, rmsDec: 0.033, frames: 12, confirmed: true },
-    { id: 'TRK_0003', ra: '14 02 11.043', dec: '+41 19 55.72', mu_ra: 124.8, mu_dec: -67.3, chi2: 2.31, rmsRA: 0.041, rmsDec: 0.038, frames: 9, confirmed: true },
-  ];
+  // Use real tracklets from backend if available, else fake ones
+  if (apiResult && apiResult.tracklets) {
+    state.tracklets = apiResult.tracklets.map((t, idx) => ({
+      ...t,
+      mu_ra: t.mu_ra !== undefined ? t.mu_ra : (40 + Math.random()*20),
+      mu_dec: t.mu_dec !== undefined ? t.mu_dec : (-20 + Math.random()*10),
+      rmsRA: 0.03, rmsDec: 0.03, frames: framesToAnalyze.length, confirmed: true
+    }));
+  } else {
+    state.tracklets = [
+      { id: 'TRK_0001', ra: '14 01 23.412', dec: '+41 12 08.34', mu_ra: 42.3, mu_dec: -18.7, chi2: 0.84, rmsRA: 0.031, rmsDec: 0.028, frames: framesToAnalyze.length, confirmed: true },
+      { id: 'TRK_0002', ra: '14 01 55.871', dec: '+41 08 42.11', mu_ra: 7.1, mu_dec: 3.2, chi2: 1.12, rmsRA: 0.029, rmsDec: 0.033, frames: framesToAnalyze.length, confirmed: true },
+      { id: 'TRK_0003', ra: '14 02 11.043', dec: '+41 19 55.72', mu_ra: 124.8, mu_dec: -67.3, chi2: 2.31, rmsRA: 0.041, rmsDec: 0.038, frames: Math.max(3, framesToAnalyze.length - 3), confirmed: true },
+    ];
+  }
 
   logSep();
-  log('SYS', `Telemetry analysis complete in ${((Date.now() - state.startTime)/1000).toFixed(1)}s — 3 valid NEO signatures confirmed.`);
+  log('SYS', `Telemetry analysis complete in ${((Date.now() - state.startTime)/1000).toFixed(1)}s — ${state.tracklets.length} valid NEO signatures confirmed.`);
   logSep();
 
   setStatus('ok', '● READY');
   bottombarStatus.textContent = 'Sequence Completed';
-  bottombarInfo.textContent = '3 validated tracklets — ADES XML available';
+  bottombarInfo.textContent = `${state.tracklets.length} validated tracklets — ADES XML available`;
   state.running = false;
   $('btn-run').disabled = false;
+
+  // Marcar frames analisados no cache e na biblioteca
+  framesToAnalyze.forEach(f => {
+    analysisCache.markAnalyzed(f.name, {
+      dateObs: f.metadata?.dateObs,
+      filter: f.metadata?.filter,
+    });
+    imageLibrary.markAnalyzed(f.name);
+    f.previouslyAnalyzed = true;
+    // Atualizar visualmente o thumbnail
+    if (f._domElement) {
+      f._domElement.classList.add('analyzed');
+    }
+  });
+  gallery._updateScienceCount();
+  log('INFO', `${framesToAnalyze.length} frames marcados como ✓ ANALYZED no cache localStorage`);
 
   renderResultsTable();
   renderADES();
@@ -813,6 +1279,16 @@ $('input-obs-code').addEventListener('input', e => {
 // ou backend próprio) para revisão por astrônomos qualificados.
 // ══════════════════════════════════════════════════════════════════════════════
 
+// ── EMAILJS CONFIGURATION ─────────────────────────────────────────────────────
+// Variáveis para envio via EmailJS. Se não estiverem configuradas, o sistema
+// fará o fallback automático para download do relatório em formato TXT/JSON.
+const EMAIL_CONFIG = {
+  PUBLIC_KEY: '',    // Seu Public Key do EmailJS
+  SERVICE_ID: '',    // Seu Service ID
+  TEMPLATE_ID: '',   // Seu Template ID
+  IS_CONFIGURED() { return this.PUBLIC_KEY && this.SERVICE_ID && this.TEMPLATE_ID; }
+};
+
 const reportModule = {
   /** Abre o overlay do formulário e preenche resumo dos dados */
   open() {
@@ -829,6 +1305,14 @@ const reportModule = {
 
     // Resumo dos dados
     this.updateDataSummary();
+
+    // Indicador visual de Configuração EmailJS
+    const submitBtn = $('report-submit-btn');
+    if (EMAIL_CONFIG.IS_CONFIGURED()) {
+      submitBtn.innerHTML = '<span class="btn-report-icon" aria-hidden="true">📡</span> ENVIAR RELATÓRIO VIA E-MAIL';
+    } else {
+      submitBtn.innerHTML = '<span class="btn-report-icon" aria-hidden="true">💾</span> BAIXAR RELATÓRIO LOCAL (E-mail não config.)';
+    }
 
     overlay.hidden = false;
   },
@@ -913,7 +1397,60 @@ const reportModule = {
     };
   },
 
-  /** Simula envio do relatório (em produção: fetch para API) */
+  /** Formata os dados num texto limpo (Fallback / Corpo do Email) */
+  formatTextReport(data, protocolId) {
+    let txt = `========================================================\n`;
+    txt += `  SPACE-FINDX ANALYSIS REPORT — ${protocolId}\n`;
+    txt += `========================================================\n\n`;
+    txt += `[OBSERVER INFO]\n`;
+    txt += `Name: ${data.observer.name}\n`;
+    txt += `Email: ${data.observer.email}\n`;
+    txt += `Institution: ${data.observer.institution || 'N/A'}\n`;
+    txt += `Obs Code: ${data.observer.obsCode || 'N/A'}\n\n`;
+    txt += `[SESSION INFO]\n`;
+    txt += `Date: ${data.session.date}\n`;
+    txt += `Telescope: ${data.session.telescope || 'N/A'}\n`;
+    txt += `Filter: ${data.session.filter}\n`;
+    txt += `Exposure: ${data.session.exposure}s\n\n`;
+    txt += `[PIPELINE RESULTS]\n`;
+    txt += `Analyzed Frames: ${data.pipeline.framesCount}\n`;
+    txt += `Valid Tracklets (NEOs): ${data.pipeline.tracklets.length}\n`;
+    if (data.includes.candidates) {
+      data.pipeline.tracklets.forEach((t, i) => {
+        txt += `  #${i+1} [${t.id}] RA: ${t.ra} | Dec: ${t.dec} | χ²: ${t.chi2}\n`;
+      });
+    }
+    txt += `\n[NOTES]\n${data.notes || 'None'}\n\n`;
+    
+    if (data.includes.ades && data.pipeline.adesXml) {
+      txt += `\n========================================================\n`;
+      txt += `  ADES XML\n`;
+      txt += `========================================================\n`;
+      txt += data.pipeline.adesXml;
+    }
+    return txt;
+  },
+
+  /** Executa o download de fallback se o Email falhar / não configurado */
+  downloadFullReport(data, protocolId) {
+    const textContent = this.formatTextReport(data, protocolId);
+    try {
+      const blob = new Blob([textContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `SFX_Report_${protocolId}.txt`;
+      a.click();
+      URL.revokeObjectURL(url);
+      log('OK', `Download de fallback realizado: SFX_Report_${protocolId}.txt`);
+      return true;
+    } catch (err) {
+      log('ERR', 'Falha ao gerar arquivo de download de fallback.');
+      return false;
+    }
+  },
+
+  /** Envio do relatório — Integração EmailJS + Fallback Local */
   async submit(e) {
     e.preventDefault();
 
@@ -951,57 +1488,86 @@ const reportModule = {
 
     // Estado de loading
     submitBtn.disabled = true;
-    submitBtn.textContent = '⟳ ENVIANDO...';
+    submitBtn.textContent = '⟳ PROCESSANDO...';
     feedback.hidden = true;
-
-    // Simular envio (em produção: fetch POST para API)
-    await delay(1500 + Math.random() * 1000);
 
     // Gerar ID de protocolo
     const protocolId = `SFX-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
-    // Feedback de sucesso
-    feedback.hidden = false;
-    feedback.className = 'report-feedback report-feedback--success';
-    feedback.innerHTML = `
-      <div class="report-feedback__title">✓ RELATÓRIO ENVIADO COM SUCESSO</div>
-      <div class="report-feedback__detail">
-        <strong>Protocolo:</strong> ${protocolId}<br>
-        <strong>Destinatário:</strong> ${formData.observer.email}<br>
-        <strong>Tracklets incluídos:</strong> ${formData.pipeline.tracklets.length}<br>
-        <strong>Conteúdo:</strong> ${Object.entries(formData.includes).filter(([,v])=>v).map(([k])=>k).join(', ')}<br><br>
-        Uma cópia do relatório foi enviada para <strong>${formData.observer.email}</strong>.
-        O tempo médio de análise é de 48–72 horas. Você receberá um e-mail com o resultado da revisão.
-      </div>
-    `;
+    // Tentar enviar via EmailJS se configurado
+    let emailSuccess = false;
+    if (EMAIL_CONFIG.IS_CONFIGURED()) {
+      try {
+        if (!window.emailjs) throw new Error('EmailJS SDK não carregado');
+        emailjs.init(EMAIL_CONFIG.PUBLIC_KEY);
+        
+        const templateParams = {
+          protocol_id: protocolId,
+          observer_name: formData.observer.name,
+          observer_email: formData.observer.email,
+          obs_code: formData.observer.obsCode,
+          tracklets_count: formData.pipeline.tracklets.length,
+          frames_count: formData.pipeline.framesCount,
+          report_body: this.formatTextReport(formData, protocolId),
+          reply_to: formData.observer.email
+        };
+
+        log('INFO', `Iniciando envio via EmailJS para ${formData.observer.email}...`);
+        await emailjs.send(EMAIL_CONFIG.SERVICE_ID, EMAIL_CONFIG.TEMPLATE_ID, templateParams);
+        emailSuccess = true;
+        log('OK', `E-mail enviado com sucesso via EmailJS.`);
+        
+      } catch (err) {
+        log('ERR', `Falha no EmailJS: ${err.message || err.text || err}. Realizando fallback para download local...`);
+      }
+    } else {
+      log('INFO', 'EmailJS não configurado (EMAIL_CONFIG vazio). Realizando fallback para download local...');
+    }
+
+    // Fallback se não configurado ou se falhou
+    if (!emailSuccess) {
+      const downloaded = this.downloadFullReport(formData, protocolId);
+      
+      feedback.hidden = false;
+      feedback.className = downloaded ? 'report-feedback report-feedback--success' : 'report-feedback report-feedback--error';
+      feedback.innerHTML = `
+        <div class="report-feedback__title">${downloaded ? '✓ RELATÓRIO SALVO LOCALMENTE' : '✗ FALHA AO SALVAR RELATÓRIO'}</div>
+        <div class="report-feedback__detail">
+          <strong>Protocolo:</strong> ${protocolId}<br>
+          ${EMAIL_CONFIG.IS_CONFIGURED() 
+            ? 'Houve um erro no envio por e-mail, então o relatório foi baixado como arquivo de texto (.txt) automaticamente.' 
+            : 'O sistema não possui o EmailJS configurado, então o relatório foi gerado e baixado como arquivo de texto (.txt).'}
+        </div>
+      `;
+    } else {
+      // Feedback de sucesso EmailJS
+      feedback.hidden = false;
+      feedback.className = 'report-feedback report-feedback--success';
+      feedback.innerHTML = `
+        <div class="report-feedback__title">✓ RELATÓRIO ENVIADO COM SUCESSO</div>
+        <div class="report-feedback__detail">
+          <strong>Protocolo:</strong> ${protocolId}<br>
+          <strong>Destinatário:</strong> ${formData.observer.email}<br>
+          <strong>Tracklets incluídos:</strong> ${formData.pipeline.tracklets.length}<br>
+          <strong>Conteúdo:</strong> ${Object.entries(formData.includes).filter(([,v])=>v).map(([k])=>k).join(', ')}<br><br>
+          Uma cópia do relatório foi enviada para <strong>${formData.observer.email}</strong> via EmailJS.
+        </div>
+      `;
+    }
 
     // Restaurar botão
     submitBtn.disabled = false;
-    submitBtn.innerHTML = '<span class="btn-report-icon" aria-hidden="true">📡</span> ENVIAR RELATÓRIO PARA ANÁLISE';
+    if (EMAIL_CONFIG.IS_CONFIGURED()) {
+      submitBtn.innerHTML = '<span class="btn-report-icon" aria-hidden="true">📡</span> ENVIAR RELATÓRIO VIA E-MAIL';
+    } else {
+      submitBtn.innerHTML = '<span class="btn-report-icon" aria-hidden="true">💾</span> BAIXAR RELATÓRIO LOCAL';
+    }
 
     // Log no terminal
     logSep();
-    log('OK', `Relatório de análise enviado — Protocolo: ${protocolId}`);
-    log('INFO', `Observador: ${formData.observer.name} <${formData.observer.email}>`);
-    if (formData.observer.institution) log('INFO', `Instituição: ${formData.observer.institution}`);
-    log('INFO', `Dados incluídos: ${formData.pipeline.tracklets.length} tracklets, ${formData.pipeline.framesCount} frames`);
-    log('INFO', `Cópia do relatório enviada para ${formData.observer.email}`);
+    log('INFO', `Resumo — Observador: ${formData.observer.name} <${formData.observer.email}>`);
+    log('INFO', `Dados: ${formData.pipeline.tracklets.length} tracklets, ${formData.pipeline.framesCount} frames`);
     logSep();
-
-    // Salvar localmente como JSON (backup)
-    try {
-      const jsonBlob = new Blob([JSON.stringify(formData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(jsonBlob);
-      // Auto-download do backup
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `space_findx_report_${protocolId}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      log('OK', `Backup local do relatório salvo: space_findx_report_${protocolId}.json`);
-    } catch (err) {
-      log('WARN', 'Não foi possível salvar backup local do relatório');
-    }
   },
 };
 

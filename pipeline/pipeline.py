@@ -8,7 +8,7 @@ Coordena todos os módulos em uma sequência de processamento coerente.
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
 
 from astropy.time import Time
 from astropy.wcs import WCS
@@ -112,7 +112,7 @@ class SpaceFindXPipeline:
         reference_fits: Path,
         output_dir: Path,
         log_callback=None,
-    ) -> Path:
+    ) -> Tuple[Optional[Path], List[Any]]:
         """
         Executa o pipeline completo do início ao fim.
 
@@ -129,8 +129,8 @@ class SpaceFindXPipeline:
 
         Returns
         -------
-        Path
-            Caminho do arquivo ADES XML gerado.
+        Tuple[Optional[Path], List[Tracklet]]
+            Caminho do arquivo ADES XML gerado e lista de tracklets confirmados.
         """
 
         def log(level: str, msg: str):
@@ -207,7 +207,7 @@ class SpaceFindXPipeline:
 
         if not tracklets:
             log("warning", "Nenhuma tracklet confirmada. Encerrando sem exportação.")
-            return None
+            return None, []
 
         # ─── ETAPA 6: EXPORTAÇÃO ADES ───────────────────────────────
         log("info", "[6/6] Exportando para formato ADES XML...")
@@ -219,4 +219,4 @@ class SpaceFindXPipeline:
         log("info", "="*60)
         log("info", f"Pipeline concluído. {len(tracklets)} NEO(s)/transiente(s) reportado(s).")
         log("info", "="*60)
-        return ades_path
+        return ades_path, tracklets

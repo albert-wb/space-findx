@@ -9,6 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+  <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
 </head>
 <body>
 
@@ -56,6 +57,9 @@
           </div>
           <button class="btn btn--outline btn--full btn--sm" id="btn-load-science">
             + LOAD SCIENCE FRAMES
+          </button>
+          <button class="btn btn--outline btn--full btn--sm" id="btn-fits-repo" style="margin-top: 6px; border-color: var(--accent-subtle); color: var(--accent-color);">
+            ◬ DOWNLOAD FITS
           </button>
         </div>
 
@@ -233,6 +237,10 @@
         <button class="tab" id="tab-fits" role="tab"
                 aria-selected="false" aria-controls="panel-fits">
           [F] FITS VIEWER
+        </button>
+        <button class="tab" id="tab-library" role="tab"
+                aria-selected="false" aria-controls="panel-library">
+          [L] IMAGE LIBRARY
         </button>
       </nav>
 
@@ -527,6 +535,54 @@
         </div>
       </div>
 
+      <!-- ─── PAINEL: IMAGE LIBRARY ─────────────────────────────────── -->
+      <div class="panel panel--hidden" id="panel-library" role="tabpanel" aria-labelledby="tab-library">
+
+        <!-- Header -->
+        <div class="library-header">
+          <h2 class="results-title">IMAGE LIBRARY</h2>
+          <button class="btn btn--outline btn--sm" id="btn-library-clear" title="Limpar histórico de frames">
+            ✕ CLEAR HISTORY
+          </button>
+        </div>
+
+        <!-- Stats -->
+        <div class="library-stats">
+          <div class="stat-item">
+            <span class="stat-label">TOTAL FRAMES</span>
+            <span class="stat-value" id="library-stat-total">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">ANALYZED ✓</span>
+            <span class="stat-value stat-value--accent" id="library-stat-analyzed">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">PENDING ○</span>
+            <span class="stat-value" id="library-stat-pending">0</span>
+          </div>
+        </div>
+
+        <!-- Filters + Search -->
+        <div class="library-filters">
+          <div class="results-filters">
+            <button class="filter-btn filter-btn--active" data-library-filter="all">ALL</button>
+            <button class="filter-btn" data-library-filter="analyzed">✓ ANALYZED</button>
+            <button class="filter-btn" data-library-filter="pending">○ PENDING</button>
+          </div>
+          <input type="search" class="library-search" id="library-search"
+                 placeholder="Search frames..." aria-label="Buscar frames na biblioteca">
+        </div>
+
+        <!-- Grid de cards -->
+        <div class="library-grid" id="library-grid">
+          <div class="library-empty" id="library-empty">
+            <span class="empty-icon" aria-hidden="true">📁</span>
+            <span>Nenhum frame na biblioteca.</span>
+            <span style="font-size: 11px; color: var(--text-dim);">Carregue frames em SCIENCE GALLERY para popular a biblioteca.</span>
+          </div>
+        </div>
+      </div>
+
     </section>
   </main>
 
@@ -545,6 +601,23 @@
       </div>
     </div>
   </footer>
+
+  <!-- Overlay de detalhes do frame FITS -->
+  <div class="overlay" id="frame-detail-overlay" role="dialog"
+       aria-modal="true" aria-labelledby="frame-detail-title" hidden>
+    <div class="overlay__panel overlay__panel--wide">
+      <button class="overlay__close" id="frame-detail-close" aria-label="Fechar">&times;</button>
+      <h3 class="overlay__title" id="frame-detail-title">
+        <span class="frame-detail-icon" aria-hidden="true">◬</span> FRAME METADATA
+      </h3>
+      <div class="frame-detail-body">
+        <div class="frame-detail-preview" id="frame-detail-preview">
+          <canvas id="frame-detail-canvas"></canvas>
+        </div>
+        <div class="overlay__content" id="frame-detail-content"></div>
+      </div>
+    </div>
+  </div>
 
   <!-- Overlay de detalhes do candidato -->
   <div class="overlay" id="candidate-overlay" role="dialog"
@@ -577,6 +650,44 @@
         <span class="submit-icon" aria-hidden="true">⏵</span> MPC SUBMISSION PROTOCOL
       </h3>
       <div class="submit-status" id="submit-status"></div>
+    </div>
+  </div>
+
+  <!-- ═══ OVERLAY: FITS REPOSITORIES ═════════════════════════════════════ -->
+  <div class="overlay" id="fits-repo-overlay" role="dialog"
+       aria-modal="true" aria-labelledby="fits-repo-overlay-title" hidden>
+    <div class="overlay__panel overlay__panel--wide">
+      <button class="overlay__close" id="fits-repo-close" aria-label="Fechar">&times;</button>
+      <h3 class="overlay__title" id="fits-repo-overlay-title">
+        <span class="submit-icon" aria-hidden="true">◬</span> PUBLIC FITS REPOSITORIES
+      </h3>
+      <div class="fits-repo-list" style="padding: 16px; color: var(--text-color);">
+        <p style="margin-bottom: 12px; font-size: 13px; color: var(--text-dim); line-height: 1.5;">
+          Acesse repositórios astronômicos públicos para baixar frames científicos reais e calibrados (.fits) e testar o Space-FindX.
+        </p>
+        <ul style="list-style: none; padding: 0; display: flex; flex-direction: column; gap: 10px;">
+          <li style="background: rgba(255, 62, 62, 0.05); border: 1px solid var(--border-color); padding: 12px; border-radius: 4px;">
+            <strong style="color: var(--accent-color);">Zwicky Transient Facility (ZTF) DR</strong><br>
+            <span style="font-size: 12px; color: var(--text-dim);">Imagens de campo largo ideais para caça a asteroides e transientes.</span><br>
+            <a href="https://irsa.ipac.caltech.edu/Missions/ztf.html" target="_blank" style="color: var(--accent-color); font-size: 12px; text-decoration: none; display: inline-block; margin-top: 4px;">Acessar Arquivo IRSA ZTF ↗</a>
+          </li>
+          <li style="background: rgba(255, 62, 62, 0.05); border: 1px solid var(--border-color); padding: 12px; border-radius: 4px;">
+            <strong style="color: var(--accent-color);">Las Cumbres Observatory (LCO) Science Archive</strong><br>
+            <span style="font-size: 12px; color: var(--text-dim);">Rede global de telescópios robóticos. Fornece dados já reduzidos (BANZAI pipeline).</span><br>
+            <a href="https://archive.lco.global/" target="_blank" style="color: var(--accent-color); font-size: 12px; text-decoration: none; display: inline-block; margin-top: 4px;">Acessar LCO Archive ↗</a>
+          </li>
+          <li style="background: rgba(255, 62, 62, 0.05); border: 1px solid var(--border-color); padding: 12px; border-radius: 4px;">
+            <strong style="color: var(--accent-color);">MAST (Mikulski Archive for Space Telescopes)</strong><br>
+            <span style="font-size: 12px; color: var(--text-dim);">Arquivos do Hubble, Kepler, TESS e Pan-STARRS (excelente para NEOs).</span><br>
+            <a href="https://mast.stsci.edu/portal/Mashup/Clients/Mast/Portal.html" target="_blank" style="color: var(--accent-color); font-size: 12px; text-decoration: none; display: inline-block; margin-top: 4px;">Acessar MAST Portal ↗</a>
+          </li>
+          <li style="background: rgba(255, 62, 62, 0.05); border: 1px solid var(--border-color); padding: 12px; border-radius: 4px;">
+            <strong style="color: var(--accent-color);">Sloan Digital Sky Survey (SDSS)</strong><br>
+            <span style="font-size: 12px; color: var(--text-dim);">Imagens nos filtros u, g, r, i, z. Ótimo para testar astrometria fotométrica.</span><br>
+            <a href="https://dr17.sdss.org/optical/image" target="_blank" style="color: var(--accent-color); font-size: 12px; text-decoration: none; display: inline-block; margin-top: 4px;">Acessar SDSS Data Release ↗</a>
+          </li>
+        </ul>
+      </div>
     </div>
   </div>
 
@@ -719,6 +830,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

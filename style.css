@@ -2,18 +2,18 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;700&display=swap');
 
 :root {
-  --bg-base:      #030712; /* Deep space dark */
-  --bg-panel:     #0B1120; /* Slightly lighter for panels */
-  --bg-card:      #111827; /* Card backgrounds */
-  --bg-terminal:  #020617; /* Very dark for terminal */
+  --bg-base:      #050505; /* Deep black (60%) */
+  --bg-panel:     #0F0A0A; /* Dark reddish black (30%) */
+  --bg-card:      #1A1010; /* Card backgrounds */
+  --bg-terminal:  #030202; /* Very dark for terminal */
   
-  --border:       #1F2937;
-  --border-dim:   #111827;
-  --border-glow:  rgba(0, 212, 255, 0.2);
+  --border:       #331A1A; /* Dark red borders */
+  --border-dim:   #1F1111;
+  --border-glow:  rgba(255, 51, 51, 0.2);
   
-  --accent:       #00D4FF; /* Astrometric Cyan */
-  --accent-dark:  #0284C7; /* Darker blue */
-  --accent-glow:  rgba(0, 212, 255, 0.15);
+  --accent:       #FF3333; /* Vibrant Red (10%) */
+  --accent-dark:  #CC0000; /* Darker red */
+  --accent-glow:  rgba(255, 51, 51, 0.15);
   
   --text-main:    #F3F4F6;
   --text-sec:     #9CA3AF;
@@ -878,4 +878,142 @@ html, body {
 .btn--outline:disabled:hover {
   border-color: var(--border); background: transparent;
   color: var(--text-main);
+}
+
+/* ── FRAME DETAIL OVERLAY ────────────────────────────────────────────── */
+.frame-detail-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: var(--accent-glow); color: var(--accent);
+  font-size: 14px;
+}
+.frame-detail-body {
+  display: flex; gap: 20px; align-items: flex-start;
+}
+.frame-detail-preview {
+  flex-shrink: 0; width: 180px; height: 180px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden; background: #000;
+  display: flex; align-items: center; justify-content: center;
+}
+.frame-detail-preview canvas {
+  width: 100%; height: 100%;
+  image-rendering: pixelated;
+}
+
+/* ── GALLERY THUMB: SELECTION CHECKBOX ───────────────────────────────── */
+.gallery-thumb__select {
+  position: absolute; top: 3px; left: 3px; z-index: 3;
+  width: 18px; height: 18px; border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6); border: 1.5px solid var(--border);
+  cursor: pointer; transition: var(--transition);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: transparent; line-height: 1;
+}
+.gallery-thumb__select:hover {
+  border-color: var(--accent); background: rgba(0, 212, 255, 0.15);
+}
+.gallery-thumb.selected .gallery-thumb__select {
+  background: var(--accent); border-color: var(--accent); color: #000;
+}
+
+/* ── GALLERY THUMB: ANALYZED BADGE ───────────────────────────────────── */
+.gallery-thumb__analyzed {
+  position: absolute; top: 3px; right: 3px; z-index: 3;
+  background: var(--ok); color: #000;
+  font-family: var(--font-mono); font-size: 7px; font-weight: 700;
+  padding: 1px 4px; border-radius: 3px;
+  letter-spacing: 0.3px; line-height: 1.3;
+  display: none;
+}
+.gallery-thumb.analyzed .gallery-thumb__analyzed {
+  display: block;
+}
+.gallery-thumb.analyzed {
+  opacity: 0.7; border-color: var(--ok);
+}
+.gallery-thumb.analyzed:hover { opacity: 1; }
+
+/* ── IMAGE LIBRARY PANEL ─────────────────────────────────────────────── */
+.library-header {
+  display: flex; align-items: center; gap: 16px; padding: 20px; flex-shrink: 0;
+}
+.library-stats {
+  display: flex; gap: 1px; background: var(--border); flex-shrink: 0;
+  margin: 0 20px; border-radius: var(--radius); overflow: hidden;
+  border: 1px solid var(--border);
+}
+.library-stats .stat-item { flex: 1; padding: 10px 14px; }
+
+.library-filters {
+  display: flex; gap: 8px; padding: 12px 20px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+.library-search {
+  flex: 1; background: var(--bg-base); border: 1px solid var(--border);
+  color: var(--text-main); font-family: var(--font-mono); font-size: 11px;
+  padding: 7px 12px; border-radius: var(--radius); outline: none;
+  transition: var(--transition); margin-left: auto; max-width: 240px;
+}
+.library-search:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.library-search::placeholder { color: var(--text-dim); }
+
+.library-grid {
+  flex: 1; overflow-y: auto; padding: 20px;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px; align-content: start;
+}
+
+.library-card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden;
+  transition: var(--transition); cursor: default;
+  animation: slideIn 0.3s ease;
+}
+.library-card:hover {
+  border-color: var(--accent); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.library-card__thumb {
+  width: 100%; aspect-ratio: 16/9; background: #000;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden;
+}
+.library-card__thumb canvas {
+  width: 100%; height: 100%; image-rendering: pixelated;
+}
+.library-card__badge {
+  position: absolute; top: 6px; right: 6px;
+  font-family: var(--font-mono); font-size: 9px; font-weight: 700;
+  padding: 3px 8px; border-radius: 4px; letter-spacing: 0.5px;
+}
+.library-card__badge--analyzed {
+  background: var(--ok); color: #000;
+}
+.library-card__badge--pending {
+  background: var(--warn); color: #000;
+}
+
+.library-card__info {
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 4px;
+}
+.library-card__name {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  color: var(--text-main); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-card__date {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);
+}
+.library-card__meta {
+  font-family: var(--font-mono); font-size: 9px; color: var(--text-dim);
+  display: flex; gap: 8px; margin-top: 2px;
+}
+
+.library-empty {
+  grid-column: 1 / -1; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; padding: 60px 20px;
+  color: var(--text-dim); font-size: 13px; text-align: center;
 }
