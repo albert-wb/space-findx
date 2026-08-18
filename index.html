@@ -52,11 +52,15 @@
                aria-label="Thumbnails dos frames de ciência">
             <div class="gallery-empty" id="gallery-science-empty">
               <span class="gallery-empty-icon">◬</span>
-              <span>Click to load .fits</span>
+              <span>No .fit/.fits loaded</span>
             </div>
           </div>
+          <input type="file" id="file-upload-science" multiple accept=".fit,.fits" style="display: none;" />
           <button class="btn btn--outline btn--full btn--sm" id="btn-load-science">
             + LOAD SCIENCE FRAMES
+          </button>
+          <button class="btn btn--upload btn--full btn--sm" id="btn-upload-science" style="margin-top: 6px;">
+            ⇪ UPLOAD LOCAL .FIT(S)
           </button>
           <button class="btn btn--outline btn--full btn--sm" id="btn-fits-repo" style="margin-top: 6px; border-color: var(--accent-subtle); color: var(--accent-color);">
             ◬ DOWNLOAD FITS
@@ -76,8 +80,12 @@
               <span>Required for ZOGY</span>
             </div>
           </div>
+          <input type="file" id="file-upload-ref" accept=".fit,.fits" style="display: none;" />
           <button class="btn btn--outline btn--full btn--sm" id="btn-load-ref">
             + LOAD REFERENCE FRAME
+          </button>
+          <button class="btn btn--upload btn--full btn--sm" id="btn-upload-ref" style="margin-top: 6px;">
+            ⇪ UPLOAD LOCAL .FIT(S)
           </button>
         </div>
 

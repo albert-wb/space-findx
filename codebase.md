@@ -195,3 +195,32 @@ As seguintes restrições de código e ciência são **mandatórias**. Qualquer 
 - **Resumo**:
   - **Ingestão Leve (Lazy Loading):** Adicionada a rota `GET /api/frames` que utiliza o `ImageIngestor` (`ccdproc.ImageFileCollection`) para varrer a pasta `dados/ciencia/` e ler apenas os cabeçalhos (< 50 KB) das imagens `.fits`, extraindo `DATE-OBS`, `FILTER` e `EXPTIME` sem causar estouro de memória (OOM).
   - **Galeria Real na UI:** O botão `LOAD SCIENCE FRAMES` da interface Web parou de simular nomes aleatórios e agora efetua um `fetch` diretamente nessa API, populando a galeria visual (e a aba Image Library) com as imagens que realmente estão presentes no disco rígido. Mantido sistema de anti-duplicação via `localStorage`.
+
+#### [v1.7] - 2026-06-22
+- **Autor**: Antigravity AI
+- **Arquivos Criados/Modificados**:
+  - [MODIFY] [requirements.txt](file:///d:/Projetos%20pessoais/space-findx/requirements.txt)
+  - [MODIFY] [server.py](file:///d:/Projetos%20pessoais/space-findx/server.py)
+  - [MODIFY] [app.js](file:///d:/Projetos%20pessoais/space-findx/app.js)
+  - [MODIFY] [index.html](file:///d:/Projetos%20pessoais/space-findx/index.html)
+  - [MODIFY] [pipeline/ingestor.py](file:///d:/Projetos%20pessoais/space-findx/pipeline/ingestor.py)
+  - [MODIFY] [style.css](file:///d:/Projetos%20pessoais/space-findx/style.css)
+- **Resumo**:
+  - **Upload Local de FITS via Browser:** Adicionado sistema de upload direto pela interface Web. Dois novos botões `⇪ UPLOAD LOCAL .FIT(S)` (classe CSS `.btn--upload`, cor emerald diferenciada) permitem ao usuário selecionar arquivos `.fit` ou `.fits` do seu computador via diálogo nativo do SO. Os arquivos são enviados via `FormData` para a nova rota `POST /api/upload/{folder}` do FastAPI, que os grava fisicamente em `dados/ciencia/` ou `dados/referencia/`.
+  - **Suporte a extensão `.fit`:** O padrão de varredura do `ImageIngestor` foi flexibilizado de `*.fits` para `*.fit*`, aceitando ambas extensões. O endpoint `GET /api/frames` e a busca do frame de referência no pipeline também foram atualizados.
+  - **Referência dinâmica:** Removido o hardcode de `reference.fits`. O pipeline agora busca qualquer arquivo `*.fit*` dentro da pasta de referência via glob.
+  - **Dependência:** Adicionado `python-multipart>=0.0.6` ao `requirements.txt` para suportar uploads multipart no FastAPI.
+
+#### [v1.7.1] - 2026-06-22
+- **Autor**: Antigravity AI
+- **Arquivos Modificados**:
+  - [MODIFY] [server.py](file:///d:/Projetos%20pessoais/space-findx/server.py)
+  - [MODIFY] [app.js](file:///d:/Projetos%20pessoais/space-findx/app.js)
+  - [MODIFY] [index.html](file:///d:/Projetos%20pessoais/space-findx/index.html)
+  - [MODIFY] [style.css](file:///d:/Projetos%20pessoais/space-findx/style.css)
+- **Resumo — Revisão e refatoração de código da v1.7**:
+  - **Backend refatorado:** `BASE_DIR` e diretórios de dados extraídos como constantes globais. Criadas funções utilitárias `_safe_float()` (tratamento de `NaN` em cabeçalhos FITS) e `_find_fits_files()` (varredura por extensão ignorando subpastas). Logs migrados de `traceback.print_exc()` para `logger.exception()`.
+  - **Novo endpoint `GET /api/frames/reference`:** Permite ao frontend ler os metadados reais do frame de referência do disco, eliminando o mock de dados sintéticos.
+  - **Upload robusto:** Sanitização contra path traversal (`Path.name`), `await upload.close()` no `finally`, resposta enriquecida com campos `skipped` (lista de arquivos rejeitados com motivo), `total_saved` e `total_skipped`. Um erro em um arquivo não aborta mais os demais.
+  - **Frontend `loadReferenceFrame()` real:** Função reescrita de mock para consumir `GET /api/frames/reference`. URL do backend extraída para constante `API_BASE`. Botão de upload exibe estado "↑ ENVIANDO..." durante transferência e exibe tamanho total em MB no log. Arquivos rejeitados são exibidos no System Log.
+  - **CSS `.btn--upload`:** Estilo visual diferenciado com borda e cor emerald (`var(--ok)`) para distinguir dos botões LOAD genéricos.

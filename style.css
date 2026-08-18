@@ -233,6 +233,26 @@ html, body {
 .btn-launch__icon { font-size: 16px; }
 .btn--launch:disabled { background: var(--bg-card); color: var(--text-dim); cursor: not-allowed; border: 1px solid var(--border); box-shadow: none; transform: none; }
 
+/* Upload button — visualmente distinto do LOAD genérico */
+.btn--upload {
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  color: var(--ok);
+  position: relative;
+  overflow: hidden;
+}
+.btn--upload:hover {
+  border-color: var(--ok);
+  background: var(--ok-glow);
+  color: var(--ok);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.15);
+}
+.btn--upload:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 /* ── CONTENT AREA ────────────────────────────────────────────────────────── */
 .content {
   flex: 1; overflow: hidden;

@@ -8,7 +8,8 @@
     "build": "vite build",
     "tunnel": "cloudflared tunnel --url http://localhost:5173",
     "backend": "uvicorn server:app --reload",
-    "start": "concurrently \"npm run backend\" \"npm run dev\" \"npm run tunnel\""
+    "start": "concurrently \"npm run backend\" \"npm run dev\" \"npm run tunnel\"",
+    "start:local": "concurrently \"npm run backend\" \"npm run dev\""
   },
   "repository": {
     "type": "git",

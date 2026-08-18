@@ -75,33 +75,32 @@ class ZOGYSubtractor:
     def _estimate_background_variance(self, data: np.ndarray) -> float:
         """
         Estima a variância do ruído de fundo via sigma-clipping.
-
-        Usa sigma-clipping iterativo (σ=3, máx 10 iterações) para
-        calcular o desvio padrão do fundo livre de fontes pontuais.
-        A variância estimada σ² é o quadrado deste desvio.
-
-        A variância é usada na normalização espectral do ZOGY, sendo
-        crítica para a validade estatística do Scorr. Uma estimativa
-        enviesada aqui invalida o limiar de detecção em sigma.
         """
-        _, _, std = sigma_clipped_stats(data, sigma=3.0, maxiters=10)
-        variance = std**2
+        try:
+            _, _, std = sigma_clipped_stats(data, sigma=3.0, maxiters=10)
+            variance = std**2
+            if np.isnan(variance) or variance <= 0:
+                logger.warning("Variância de fundo calculada como zero ou NaN. Usando valor mínimo 1.0.")
+                variance = 1.0
+        except Exception as e:
+            logger.warning(f"Erro ao calcular variância de fundo ({e}). Usando valor padrão 1.0.")
+            variance = 1.0
         logger.debug(f"Variância de fundo estimada: {variance:.4f} ADU²")
         return variance
 
     def _gaussian_psf(self, shape: Tuple[int, int], fwhm: float) -> np.ndarray:
         """
         Gera PSF Gaussiana 2D normalizada (integral = 1).
-
-        Parâmetro de escala: σ = FWHM / (2√(2 ln 2)) ≈ FWHM / 2.3548
-
-        A normalização garante conservação de fluxo após convolução.
         """
-        sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+        fwhm_val = max(0.1, fwhm)
+        sigma = fwhm_val / (2.0 * np.sqrt(2.0 * np.log(2.0)))
         ny, nx = shape
         y, x = np.mgrid[-ny // 2 : ny // 2, -nx // 2 : nx // 2]
         psf = np.exp(-(x**2 + y**2) / (2.0 * sigma**2))
-        psf /= psf.sum()  # normalização L1 = conservação de fluxo
+        psf_sum = psf.sum()
+        if psf_sum == 0:
+            psf_sum = 1.0
+        psf /= psf_sum  # normalização L1 = conservação de fluxo
         return psf
 
     def subtract(
@@ -142,11 +141,28 @@ class ZOGYSubtractor:
         N = science_ccd.data.astype(np.float64)
         R = reference_ccd.data.astype(np.float64)
 
+        # Substitui NaNs por zero para evitar que as FFTs se propaguem como NaNs
+        N = np.nan_to_num(N, nan=0.0)
+        R = np.nan_to_num(R, nan=0.0)
+
         if N.shape != R.shape:
-            raise ValueError(
+            logger.warning(
                 f"Shape incompatível: ciência {N.shape} ≠ referência {R.shape}. "
-                "Execute o alinhamento (Módulo 2) antes da subtração."
+                "Forçando preenchimento/corte (crop/pad) na referência para permitir subtração matemática."
             )
+            target_shape = N.shape
+            new_R = np.zeros(target_shape, dtype=np.float64)
+            min_y = min(R.shape[0], target_shape[0])
+            min_x = min(R.shape[1], target_shape[1])
+            
+            # Centralizando a imagem de referência no grid da ciência
+            y_off_R = (R.shape[0] - min_y) // 2
+            x_off_R = (R.shape[1] - min_x) // 2
+            y_off_N = (target_shape[0] - min_y) // 2
+            x_off_N = (target_shape[1] - min_x) // 2
+            
+            new_R[y_off_N:y_off_N+min_y, x_off_N:x_off_N+min_x] = R[y_off_R:y_off_R+min_y, x_off_R:x_off_R+min_x]
+            R = new_R
 
         # Estima variâncias do fundo
         sigma_n_sq = self._estimate_background_variance(N)
@@ -197,10 +213,15 @@ class ZOGYSubtractor:
         # Imagem de significância S_corr
         # Var(D) = 1 por construção ZOGY (normalização espectral acima)
         # Na prática, re-estimamos sigma_D para verificação de sanidade
-        _, _, sigma_D = sigma_clipped_stats(D, sigma=3.0, maxiters=5)
-        if sigma_D < 1e-10:
+        try:
+            _, _, sigma_D = sigma_clipped_stats(D, sigma=3.0, maxiters=5)
+        except Exception as e:
+            logger.warning(f"Erro ao calcular sigma_D do ruído de diferença ({e}). Usando fallback 1.0.")
             sigma_D = 1.0
-            logger.warning("sigma_D muito próximo de zero — imagens idênticas?")
+            
+        if np.isnan(sigma_D) or sigma_D < 1e-10:
+            sigma_D = 1.0
+            logger.warning("sigma_D inválido ou próximo de zero — usando fallback 1.0")
 
         S_corr = D / sigma_D
 

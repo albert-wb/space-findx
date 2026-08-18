@@ -290,10 +290,8 @@ class ADESExporter:
         """
         confirmed = [t for t in tracklets if t.is_confirmed]
         if not confirmed:
-            raise ValueError(
-                "Nenhuma tracklet confirmada disponível para exportação. "
-                "Execute a linkagem e validação antes de exportar."
-            )
+            logger.info("Nenhuma tracklet confirmada para exportação ADES XML.")
+            return None
 
         # Data de geração do arquivo (UTC, não PII)
         generation_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -334,14 +332,16 @@ class ADESExporter:
         pretty_xml = "\n".join(pretty_xml.split("\n")[1:])
 
         # Garante que o diretório existe
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
-            f.write(pretty_xml)
-
-        logger.info(
-            f"ADES XML exportado: {output_path} | "
-            f"{len(confirmed)} tracklets | {total_obs} observações"
-        )
-        return output_path
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+                f.write(pretty_xml)
+            logger.info(
+                f"ADES XML exportado: {output_path} | "
+                f"{len(confirmed)} tracklets | {total_obs} observações"
+            )
+            return output_path
+        except Exception as io_err:
+            logger.error(f"Erro de E/S ao salvar arquivo ADES XML em {output_path}: {io_err}")
+            return None

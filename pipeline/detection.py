@@ -174,21 +174,34 @@ class TransientDetector:
             scorr_clean = scorr
 
         # Calcula fundo local do S_corr (deve ser ~0 por construção ZOGY)
-        _, median_sc, std_sc = sigma_clipped_stats(scorr_clean, sigma=3.0, maxiters=5)
+        try:
+            _, median_sc, std_sc = sigma_clipped_stats(scorr_clean, sigma=3.0, maxiters=5)
+            if np.isnan(median_sc):
+                median_sc = 0.0
+            if np.isnan(std_sc) or std_sc <= 0:
+                std_sc = 1.0
+        except Exception as e:
+            logger.warning(f"Erro ao calcular estatísticas de fundo em detect ({e}). Usando fallbacks.")
+            median_sc = 0.0
+            std_sc = 1.0
         logger.debug(f"S_corr fundo: median={median_sc:.4f}, std={std_sc:.4f}")
 
         # --- DAOStarFinder ---
-        dao = DAOStarFinder(
-            threshold=self.threshold * std_sc,
-            fwhm=self.fwhm,
-            sharplo=self.sharpness_min,
-            sharphi=self.sharpness_max,
-            roundlo=-self.roundness_max,
-            roundhi=self.roundness_max,
-            brightest=None,  # sem limite de número de fontes
-            peakmax=None,
-        )
-        sources = dao(scorr_clean - median_sc)
+        try:
+            dao = DAOStarFinder(
+                threshold=self.threshold * std_sc,
+                fwhm=self.fwhm,
+                sharplo=self.sharpness_min,
+                sharphi=self.sharpness_max,
+                roundlo=-self.roundness_max,
+                roundhi=self.roundness_max,
+                brightest=None,  # sem limite de número de fontes
+                peakmax=None,
+            )
+            sources = dao(scorr_clean - median_sc)
+        except Exception as e:
+            logger.error(f"Erro fatal no DAOStarFinder ({e}). Pulando detecção no frame {frame_index}.")
+            return []
 
         if sources is None or len(sources) == 0:
             logger.info(f"Frame {frame_index}: Nenhuma fonte detectada acima de {self.threshold}σ.")
@@ -202,34 +215,37 @@ class TransientDetector:
         # --- Construção de candidatos com filtragem ---
         candidates = []
         for i, src in enumerate(sources):
-            x = float(src["xcentroid"])
-            y = float(src["ycentroid"])
-            peak = float(src["peak"])
-            sharp = float(src["sharpness"])
-            round1 = float(src["roundness1"])
-            round2 = float(src["roundness2"])
-            elong = elongation_map.get((int(round(y)), int(round(x))), 1.0)
+            try:
+                x = float(src["xcentroid"])
+                y = float(src["ycentroid"])
+                peak = float(src["peak"])
+                sharp = float(src["sharpness"])
+                round1 = float(src["roundness1"])
+                round2 = float(src["roundness2"])
+                elong = elongation_map.get((int(round(y)), int(round(x))), 1.0)
 
-            candidate = DetectedCandidate(
-                id=i,
-                x_pixel=x,
-                y_pixel=y,
-                peak_significance=peak / std_sc,
-                sharpness=sharp,
-                roundness1=round1,
-                roundness2=round2,
-                elongation=elong,
-                frame_index=frame_index,
-            )
+                candidate = DetectedCandidate(
+                    id=i,
+                    x_pixel=x,
+                    y_pixel=y,
+                    peak_significance=peak / std_sc,
+                    sharpness=sharp,
+                    roundness1=round1,
+                    roundness2=round2,
+                    elongation=elong,
+                    frame_index=frame_index,
+                )
 
-            # Aplica filtros morfológicos
-            rejection = self._apply_morphological_filters(candidate)
-            if rejection:
-                candidate.is_valid = False
-                candidate.rejection_reason = rejection
-                logger.debug(f"Fonte {i} rejeitada: {rejection}")
+                # Aplica filtros morfológicos
+                rejection = self._apply_morphological_filters(candidate)
+                if rejection:
+                    candidate.is_valid = False
+                    candidate.rejection_reason = rejection
+                    logger.debug(f"Fonte {i} rejeitada: {rejection}")
 
-            candidates.append(candidate)
+                candidates.append(candidate)
+            except Exception as src_err:
+                logger.warning(f"Erro ao processar fonte {i} no frame {frame_index}: {src_err}. Ignorando fonte.")
 
         valid_count = sum(c.is_valid for c in candidates)
         logger.info(
@@ -266,20 +282,23 @@ class TransientDetector:
                 threshold=threshold_map - background,
                 npixels=self.min_area_pixels,
             )
-        except Exception:
+            if seg_map is None:
+                return {}
+
+            catalog = SourceCatalog(scorr - background, seg_map)
+            elongation_map = {}
+            for source in catalog:
+                try:
+                    row = int(round(source.centroid[0]))
+                    col = int(round(source.centroid[1]))
+                    elong_val = getattr(source.elongation, 'value', float(source.elongation))
+                    elongation_map[(row, col)] = float(elong_val)
+                except Exception as src_el_err:
+                    logger.debug(f"Erro ao obter elongação individual de fonte: {src_el_err}")
+            return elongation_map
+        except Exception as e:
+            logger.warning(f"Erro no cálculo de elongações das fontes segmentadas: {e}")
             return {}
-
-        if seg_map is None:
-            return {}
-
-        catalog = SourceCatalog(scorr - background, seg_map)
-        elongation_map = {}
-        for source in catalog:
-            row = int(round(source.centroid[0]))
-            col = int(round(source.centroid[1]))
-            elongation_map[(row, col)] = float(source.elongation.value)
-
-        return elongation_map
 
     def _apply_morphological_filters(self, c: DetectedCandidate) -> str:
         """

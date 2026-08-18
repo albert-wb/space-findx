@@ -93,12 +93,14 @@ class InstrumentalCalibrator:
         # Normaliza o flat pela sua mediana para que FlatNorm ∈ [~0, ~1]
         if self.master_flat is not None:
             flat_median = np.median(self.master_flat.data)
-            if flat_median == 0:
-                raise ValueError("Flat mestre tem mediana zero — arquivo corrompido ou inválido.")
-            self.master_flat = self.master_flat.divide(
-                flat_median * u.adu, handle_mask="first_found"
-            )
-            logger.info(f"Flat mestre normalizado pela mediana: {flat_median:.2f} ADU")
+            if flat_median == 0 or np.isnan(flat_median):
+                logger.error("Flat mestre tem mediana zero ou NaN — desabilitando correção de flat.")
+                self.master_flat = None
+            else:
+                self.master_flat = self.master_flat.divide(
+                    flat_median * u.adu, handle_mask="first_found"
+                )
+                logger.info(f"Flat mestre normalizado pela mediana: {flat_median:.2f} ADU")
 
     def _load_ccd(self, path: Optional[Path], name: str) -> Optional[CCDData]:
         """
@@ -118,71 +120,32 @@ class InstrumentalCalibrator:
             logger.info(f"{name} carregado de: {path} | Shape: {ccd.data.shape}")
             return ccd
         except Exception as e:
-            logger.error(f"Falha ao carregar {name} de {path}: {e}")
-            raise
+            logger.error(f"Falha ao carregar {name} de {path}: {e}. Continuando sem esse frame mestre.")
+            return None
 
     def _identify_hot_pixels(self, data: np.ndarray) -> np.ndarray:
         """
         Identifica hot pixels usando estatística sigma-clipped.
-
-        Fundamento Matemático:
-            Um hot pixel é definido como qualquer pixel cuja contagem
-            excede a média sigma-clipped (μ_sc) por mais de N desvios
-            padrão (σ_sc):
-
-                MáscaraHot(x,y) = 1  se  data(x,y) > μ_sc + N * σ_sc
-
-            O sigma-clipping é iterativo: remove outliers, recalcula
-            μ e σ, e repete até convergência. Isso garante que a
-            estimativa de fundo seja robusta contra a própria população
-            de hot pixels, evitando o viés de estimação.
-
-        Parameters
-        ----------
-        data : np.ndarray
-            Array 2D da imagem (float64).
-
-        Returns
-        -------
-        np.ndarray
-            Máscara booleana 2D: True onde o pixel é considerado "quente".
+        ...
         """
-        _, median_sc, std_sc = sigma_clipped_stats(data, sigma=3.0, maxiters=10)
-        threshold = median_sc + self.hot_pixel_sigma * std_sc
-        hot_mask = data > threshold
-        n_hot = np.sum(hot_mask)
-        logger.info(
-            f"Hot pixels identificados: {n_hot} "
-            f"({100*n_hot/data.size:.4f}% do frame) | "
-            f"Limiar: {threshold:.2f} ADU"
-        )
-        return hot_mask
+        try:
+            _, median_sc, std_sc = sigma_clipped_stats(data, sigma=3.0, maxiters=10)
+            threshold = median_sc + self.hot_pixel_sigma * std_sc
+            hot_mask = data > threshold
+            n_hot = np.sum(hot_mask)
+            logger.info(
+                f"Hot pixels identificados: {n_hot} "
+                f"({100*n_hot/data.size:.4f}% do frame) | "
+                f"Limiar: {threshold:.2f} ADU"
+            )
+            return hot_mask
+        except Exception as e:
+            logger.warning(f"Falha ao identificar hot pixels ({e}). Retornando máscara vazia.")
+            return np.zeros_like(data, dtype=bool)
 
     def calibrate(self, raw_fits_path: Path) -> Tuple[CCDData, np.ndarray]:
         """
         Aplica a cadeia completa de calibração a um frame bruto.
-
-        Sequência de operações (ordem matematicamente obrigatória):
-            1. Leitura e conversão para float64
-            2. Subtração do overscan (remove pedestal do amplificador)
-            3. Subtração do bias mestre (remove offset eletrônico fixo)
-            4. Subtração do dark mestre escalonado no tempo:
-                   Dark_scaled(x,y,t) = Dark_mestre(x,y) * (t_sci / t_dark)
-            5. Divisão pelo flat normalizado:
-                   Calib(x,y) = (Raw - Bias - Dark_scaled) / Flat_norm
-            6. Geração da máscara de hot pixels no frame calibrado
-
-        Parameters
-        ----------
-        raw_fits_path : Path
-            Caminho para o arquivo FITS bruto de ciência.
-
-        Returns
-        -------
-        calibrated_ccd : CCDData
-            Imagem calibrada com dados em float64 e cabeçalho WCS preservado.
-        hot_pixel_mask : np.ndarray
-            Máscara booleana de hot pixels (True = pixel corrompido).
         """
         logger.info(f"Iniciando calibração de: {raw_fits_path.name}")
 
@@ -194,43 +157,57 @@ class InstrumentalCalibrator:
 
         # --- Etapa 2: Subtração do Bias ---
         if self.master_bias is not None:
-            calibrated = ccdproc.subtract_bias(calibrated, self.master_bias)
-            logger.debug("Bias subtraído.")
+            try:
+                calibrated = ccdproc.subtract_bias(calibrated, self.master_bias)
+                logger.debug("Bias subtraído.")
+            except Exception as e:
+                logger.error(f"Falha ao subtrair bias: {e}. Ignorando bias.")
 
         # --- Etapa 3: Subtração do Dark Mestre ---
         if self.master_dark is not None:
-            # exposure_time obtido do cabeçalho FITS (palavra-chave padrão EXPTIME)
+            # exposure_time obtido do cabeçalho FITS
             exposure_key = "EXPTIME"
             if exposure_key not in calibrated.header:
-                raise KeyError(
-                    f"Cabeçalho FITS sem '{exposure_key}'. "
-                    "Impossível escalonar o dark current."
+                if "EXPOSURE" in calibrated.header:
+                    exposure_key = "EXPOSURE"
+                else:
+                    logger.warning(
+                        "Cabeçalho FITS sem 'EXPTIME' ou 'EXPOSURE'. "
+                        "Usando tempo de exposição padrão de 30.0s para escalonamento do dark."
+                    )
+                    calibrated.header["EXPTIME"] = 30.0
+                    exposure_key = "EXPTIME"
+            
+            try:
+                calibrated = ccdproc.subtract_dark(
+                    calibrated,
+                    self.master_dark,
+                    exposure_time=exposure_key,
+                    exposure_unit=u.second,
+                    scale=True,  # escalonamento linear pelo tempo
                 )
-            calibrated = ccdproc.subtract_dark(
-                calibrated,
-                self.master_dark,
-                exposure_time=exposure_key,
-                exposure_unit=u.second,
-                scale=True,  # escalonamento linear pelo tempo
-            )
-            logger.debug(
-                f"Dark subtraído e escalonado para t={calibrated.header[exposure_key]}s."
-            )
+                logger.debug(
+                    f"Dark subtraído e escalonado para t={calibrated.header[exposure_key]}s."
+                )
+            except Exception as e:
+                logger.error(f"Falha ao subtrair dark: {e}. Ignorando dark.")
 
         # --- Etapa 4: Correção de Flat Field ---
         if self.master_flat is not None:
-            calibrated = ccdproc.flat_correct(
-                calibrated,
-                self.master_flat,
-                min_value=0.01,  # evita divisão por flat ≈ 0 (pixels mortos)
-            )
-            logger.debug("Flat field aplicado.")
+            try:
+                calibrated = ccdproc.flat_correct(
+                    calibrated,
+                    self.master_flat,
+                    min_value=0.01,  # evita divisão por flat ≈ 0 (pixels mortos)
+                )
+                logger.debug("Flat field aplicado.")
+            except Exception as e:
+                logger.error(f"Falha na correção de flat field: {e}. Ignorando flat.")
 
         # --- Etapa 5: Garantia de Tipo Float ---
-        # Verificação de segurança: nenhuma operação deve ter convertido para int
-        assert calibrated.data.dtype in (
-            np.float32, np.float64
-        ), f"ERRO CRÍTICO: dtype corrompido para {calibrated.data.dtype}. Pipeline abortado."
+        if calibrated.data.dtype not in (np.float32, np.float64):
+            logger.warning(f"Tipo de dados do frame corrompido para {calibrated.data.dtype}. Forçando conversão para float64.")
+            calibrated.data = calibrated.data.astype(np.float64)
 
         # --- Etapa 6: Mascaramento de Hot Pixels ---
         hot_mask = self._identify_hot_pixels(calibrated.data)

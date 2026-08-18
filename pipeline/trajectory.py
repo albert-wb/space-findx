@@ -193,11 +193,17 @@ class TrajectoryLinker:
             )
             return []
 
-        # Converte pixels -> sky para todos os frames
-        frame_sky = {
-            fi: self.pixel_to_sky(frame_candidates[fi], frame_wcs[fi])
-            for fi in frame_indices
-        }
+        # Converte pixels -> sky para todos os frames de forma segura
+        frame_sky = {}
+        for fi in frame_indices:
+            try:
+                if fi in frame_wcs and frame_wcs[fi] is not None:
+                    frame_sky[fi] = self.pixel_to_sky(frame_candidates[fi], frame_wcs[fi])
+                else:
+                    frame_sky[fi] = {}
+            except Exception as e:
+                logger.error(f"Erro na conversão pixel->céu do frame {fi}: {e}")
+                frame_sky[fi] = {}
 
         tracklets = []
         tracklet_counter = 0
@@ -205,10 +211,16 @@ class TrajectoryLinker:
 
         # Frame semente: o primeiro frame
         seed_frame = frame_indices[0]
+        if seed_frame not in frame_sky or seed_frame not in frame_times or seed_frame not in frame_candidates:
+            logger.warning(f"Frame semente {seed_frame} com dados incompletos. Cancelando linkagem.")
+            return []
+
         for seed_cand in frame_candidates[seed_frame]:
             if not seed_cand.is_valid:
                 continue
             if (seed_frame, seed_cand.id) in used_detections:
+                continue
+            if seed_cand.id not in frame_sky[seed_frame]:
                 continue
 
             # Inicia uma tracklet candidata com a semente
@@ -221,6 +233,8 @@ class TrajectoryLinker:
 
             # Extende para frames subsequentes
             for fi in frame_indices[1:]:
+                if fi not in frame_times or fi not in frame_sky or fi not in frame_candidates:
+                    continue
                 dt_hr = (frame_times[fi] - last_time).to(u.hour).value
                 max_sep = self.max_speed * dt_hr * u.arcsec
 
@@ -236,6 +250,8 @@ class TrajectoryLinker:
                         continue
 
                     cand_sky = frame_sky[fi][cand.id]
+                    if last_sky is None or cand_sky is None:
+                        continue
                     sep = last_sky.separation(cand_sky).to(u.arcsec)
 
                     if sep < best_sep:
@@ -312,7 +328,7 @@ class TrajectoryLinker:
             # Mínimos quadrados via numpy (SVD internamente)
             coeff_ra, _, _, _ = np.linalg.lstsq(A, ra_vals, rcond=None)
             coeff_dec, _, _, _ = np.linalg.lstsq(A, dec_vals, rcond=None)
-        except np.linalg.LinAlgError as e:
+        except Exception as e:
             logger.error(f"Falha no ajuste linear de {tracklet_id}: {e}")
             return TrajectoryCandidate(
                 tracklet_id=tracklet_id,

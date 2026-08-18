@@ -12,6 +12,9 @@ const state = {
   currentFilter: 'all',
 };
 
+// URL base do backend (resolve automaticamente a partir da porta do Vite)
+const API_BASE = 'http://localhost:8000';
+
 // ── ANALYSIS CACHE (localStorage anti-duplicação) ─────────────────────────────
 const analysisCache = {
   STORAGE_KEY: 'spacefindx_analyzed_frames',
@@ -559,12 +562,12 @@ const gallery = {
 
     try {
       log('INFO', 'Buscando arquivos FITS reais no disco (dados/ciencia)...');
-      const res = await fetch('http://localhost:8000/api/frames');
+      const res = await fetch(`${API_BASE}/api/frames`);
       const data = await res.json();
       
       if (data.status === 'empty' || data.frames.length === 0) {
-        log('WARN', "Nenhum arquivo FITS encontrado na pasta 'dados/ciencia'.");
-        alert("Pasta 'dados/ciencia' está vazia! Coloque arquivos .fits para carregar.");
+        log('WARN', "Nenhum arquivo .fit/.fits encontrado na pasta 'dados/ciencia'.");
+        alert("Pasta 'dados/ciencia' está vazia! Coloque arquivos .fit ou .fits, ou use o botão \u21ea UPLOAD.");
         return;
       }
       
@@ -627,37 +630,60 @@ const gallery = {
 
     } catch (e) {
       log('ERR', 'Erro ao carregar FITS do backend: ' + e.message);
-      alert("Erro ao conectar no servidor Backend. Verifique se 'npm start' está rodando!");
+      alert("Erro ao conectar no servidor Backend (" + API_BASE + "). Verifique se 'npm start' está rodando!");
     }
   },
 
-  /** Simula carga do reference frame */
-  loadReferenceFrame() {
+  /** Carrega o reference frame REAL do backend via API */
+  async loadReferenceFrame() {
     const grid = $('gallery-ref');
     const emptyMsg = $('gallery-ref-empty');
 
-    const name = 'reference_stacked.fits';
-    const field = this.generateThumbField(64, 64, 999);
-    const metadata = this.generateFrameMetadata(0, 0);
-    metadata.object = 'Reference Stack (master)';
-    metadata.exptime = 1800;
-    this.referenceFrame = { name, ...field, metadata };
+    try {
+      log('INFO', 'Buscando frame de referência em dados/referencia...');
+      const res = await fetch(`${API_BASE}/api/frames/reference`);
+      const data = await res.json();
 
-    emptyMsg.hidden = true;
+      if (data.status === 'empty' || data.frames.length === 0) {
+        log('WARN', "Nenhum arquivo .fit/.fits encontrado na pasta 'dados/referencia'.");
+        alert("Pasta 'dados/referencia' está vazia! Faça upload ou copie o frame de referência.");
+        return;
+      }
 
-    // Limpa grid anterior antes de adicionar o novo reference
-    const existingThumbs = grid.querySelectorAll('.gallery-thumb');
-    existingThumbs.forEach(t => t.remove());
+      emptyMsg.hidden = true;
 
-    const frameData = { name, ...field, selected: true, metadata, previouslyAnalyzed: false };
-    const el = this.createThumbElement(name, field, frameData);
-    el.classList.add('selected');
-    grid.appendChild(el);
+      // Limpa thumbs anteriores
+      grid.querySelectorAll('.gallery-thumb').forEach(t => t.remove());
 
-    $('ref-count').textContent = '1 frame';
-    state.refLoaded = true;
-    updateRunButton();
-    log('OK', `Reference frame ingested: ${name} (ZScale thumbnail generated)`);
+      // Usa o primeiro frame encontrado como referência
+      const f = data.frames[0];
+      const name = f.filename;
+      const field = this.generateThumbField(64, 64, 999);
+
+      const metadata = {
+        dateObs: f.date_obs,
+        filter: f.filter,
+        exptime: f.exptime,
+        object: 'Reference Frame',
+        dimensions: '4096x4096',
+        datatype: 'float64'
+      };
+
+      this.referenceFrame = { name, ...field, metadata };
+
+      const frameData = { name, ...field, selected: true, metadata, previouslyAnalyzed: false };
+      const el = this.createThumbElement(name, field, frameData);
+      el.classList.add('selected');
+      grid.appendChild(el);
+
+      $('ref-count').textContent = '1 frame';
+      state.refLoaded = true;
+      updateRunButton();
+      log('OK', `Reference frame ingested: ${name} (ZScale thumbnail generated)`);
+    } catch (e) {
+      log('ERR', 'Erro ao carregar referência do backend: ' + e.message);
+      alert("Erro ao conectar no servidor Backend (" + API_BASE + "). Verifique se 'npm start' está rodando!");
+    }
   },
 
   /**
@@ -704,12 +730,75 @@ const gallery = {
     overlay.hidden = false;
     log('INFO', `Frame details opened: ${frameData.name} — DATE-OBS: ${m.dateObs || 'N/A'}`);
   },
+
+  async uploadLocalFiles(folder, inputElement, triggerButton) {
+    const files = inputElement.files;
+    if (!files || files.length === 0) return;
+    
+    // Estado visual de loading no botão
+    const originalText = triggerButton.textContent;
+    triggerButton.disabled = true;
+    triggerButton.textContent = '↑ ENVIANDO...';
+    triggerButton.style.opacity = '0.6';
+    
+    const totalSize = Array.from(files).reduce((sum, f) => sum + f.size, 0);
+    const sizeMB = (totalSize / (1024 * 1024)).toFixed(1);
+    log('INFO', `Iniciando upload de ${files.length} arquivo(s) para '${folder}' (${sizeMB} MB)...`);
+    
+    const formData = new FormData();
+    for (let i = 0; i < files.length; i++) {
+      formData.append('files', files[i]);
+    }
+    
+    try {
+      const res = await fetch(`${API_BASE}/api/upload/${folder}`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Erro no upload');
+      
+      log('OK', `Upload concluído: ${data.total_saved} arquivo(s) salvo(s) em dados/${folder}/.`);
+      
+      // Reporta arquivos rejeitados
+      if (data.skipped && data.skipped.length > 0) {
+        data.skipped.forEach(s => {
+          log('WARN', `Arquivo rejeitado: ${s.filename} — ${s.reason}`);
+        });
+      }
+      
+      // Recarrega a galeria correspondente
+      if (folder === 'ciencia') {
+        await this.loadScienceFrames();
+      } else {
+        await this.loadReferenceFrame();
+      }
+    } catch (e) {
+      log('ERR', `Falha no upload: ${e.message}`);
+      alert(`Falha no upload: ${e.message}`);
+    } finally {
+      inputElement.value = '';
+      triggerButton.disabled = false;
+      triggerButton.textContent = originalText;
+      triggerButton.style.opacity = '';
+    }
+  },
 };
 
 // Bind gallery buttons
 $('btn-load-science').addEventListener('click', () => gallery.loadScienceFrames());
 $('btn-load-ref').addEventListener('click', () => gallery.loadReferenceFrame());
 $('btn-fits-repo').addEventListener('click', () => { $('fits-repo-overlay').hidden = false; });
+
+$('btn-upload-science').addEventListener('click', () => $('file-upload-science').click());
+$('file-upload-science').addEventListener('change', (e) => {
+  gallery.uploadLocalFiles('ciencia', e.target, $('btn-upload-science'));
+});
+
+$('btn-upload-ref').addEventListener('click', () => $('file-upload-ref').click());
+$('file-upload-ref').addEventListener('change', (e) => {
+  gallery.uploadLocalFiles('referencia', e.target, $('btn-upload-ref'));
+});
 
 // Bind frame detail overlay close
 $('frame-detail-close').addEventListener('click', () => { $('frame-detail-overlay').hidden = true; });

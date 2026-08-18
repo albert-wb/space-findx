@@ -95,7 +95,7 @@ class ImageIngestor:
     def __init__(
         self,
         directory: Union[str, Path],
-        pattern: str = "*.fits",
+        pattern: str = "*.fit*",
         required_keys: Optional[List[str]] = None,
     ):
         self.directory = Path(directory)
@@ -154,25 +154,36 @@ class ImageIngestor:
             f"Iniciando varredura leve de metadados em: {self.directory}"
         )
 
-        self.collection = ccdproc.ImageFileCollection(
-            location=str(self.directory),
-            glob_include=self.pattern,
-        )
-
-        if len(self.collection.files) == 0:
+        # Busca arquivos manualmente para evitar bug do ccdproc com cabeçalhos malformados
+        fits_files = list(self.directory.glob(self.pattern))
+        
+        if len(fits_files) == 0:
             raise FileNotFoundError(
                 f"Nenhum arquivo FITS encontrado em {self.directory} "
                 f"com padrão '{self.pattern}'"
             )
 
-        # Extrai tabela de sumário (somente cabeçalhos, sem pixels)
-        summary = self.collection.summary
-        self.metadata_df = summary.to_pandas()
+        # Extrai cabeçalhos de forma robusta
+        rows = []
+        for fpath in fits_files:
+            try:
+                # ignore_missing_end=True previne erros de leitura se o FITS não for perfeito
+                hdr = fits.getheader(fpath, ignore_missing_end=True)
+                row_dict = {"file": fpath.name, "filepath": str(fpath)}
+                
+                for k, v in hdr.items():
+                    if k:  # ignora chaves em branco
+                        # Usa a versão minúscula da chave para manter compatibilidade com ccdproc
+                        key_lower = k.lower()
+                        # Evita sobrescrever se a chave já existir (pega a primeira ocorrência, comum em FITS)
+                        if key_lower not in row_dict:
+                            row_dict[key_lower] = v
+                            
+                rows.append(row_dict)
+            except Exception as e:
+                logger.warning(f"Erro ao extrair cabeçalho de {fpath.name}: {e}")
 
-        # Adiciona coluna com caminho absoluto
-        self.metadata_df["filepath"] = [
-            str(self.directory / f) for f in self.metadata_df["file"]
-        ]
+        self.metadata_df = pd.DataFrame(rows)
 
         # Verifica chaves obrigatórias
         for key in self.required_keys:
@@ -576,88 +587,101 @@ class ImageIngestor:
         save_path : Path, optional
             Se fornecido, salva a figura em disco (PNG 150 dpi).
         """
-        import matplotlib.pyplot as plt
-
-        n_candidates = len(cutouts)
-        n_frames = max(len(row) for row in cutouts) if cutouts else 0
-
-        if n_candidates == 0 or n_frames == 0:
-            logger.warning("Nenhum recorte disponível para plotagem.")
+        try:
+            import matplotlib
+            # Força o backend 'Agg' se não houver tela/display ativo
+            # para evitar quebra em servidores remotos ou no backend FastAPI
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            logger.warning("Matplotlib não instalado. Não é possível plotar a grade de vetação.")
             return
 
-        fig, axes = plt.subplots(
-            n_candidates,
-            n_frames,
-            figsize=(
-                figsize_per_cell * n_frames,
-                figsize_per_cell * n_candidates,
-            ),
-            squeeze=False,
-        )
+        try:
+            n_candidates = len(cutouts)
+            n_frames = max(len(row) for row in cutouts) if cutouts else 0
 
-        for i in range(n_candidates):
-            label = (
-                candidate_labels[i]
-                if candidate_labels and i < len(candidate_labels)
-                else f"Candidato {i}"
+            if n_candidates == 0 or n_frames == 0:
+                logger.warning("Nenhum recorte disponível para plotagem.")
+                return
+
+            fig, axes = plt.subplots(
+                n_candidates,
+                n_frames,
+                figsize=(
+                    figsize_per_cell * n_frames,
+                    figsize_per_cell * n_candidates,
+                ),
+                squeeze=False,
             )
-            axes[i][0].set_ylabel(label, fontsize=9, fontweight="bold")
 
-            for j in range(n_frames):
-                ax = axes[i][j]
-                ax.set_xticks([])
-                ax.set_yticks([])
+            for i in range(n_candidates):
+                label = (
+                    candidate_labels[i]
+                    if candidate_labels and i < len(candidate_labels)
+                    else f"Candidato {i}"
+                )
+                axes[i][0].set_ylabel(label, fontsize=9, fontweight="bold")
 
-                if i == 0:
-                    ax.set_title(f"t{j}", fontsize=8)
+                for j in range(n_frames):
+                    ax = axes[i][j]
+                    ax.set_xticks([])
+                    ax.set_yticks([])
 
-                cutout = cutouts[i][j] if j < len(cutouts[i]) else None
-                if cutout is None:
-                    ax.text(
-                        0.5, 0.5, "N/A",
-                        ha="center", va="center",
-                        transform=ax.transAxes,
-                        fontsize=8, color="gray",
+                    if i == 0:
+                        ax.set_title(f"t{j}", fontsize=8)
+
+                    cutout = cutouts[i][j] if j < len(cutouts[i]) else None
+                    if cutout is None:
+                        ax.text(
+                            0.5, 0.5, "N/A",
+                            ha="center", va="center",
+                            transform=ax.transAxes,
+                            fontsize=8, color="gray",
+                        )
+                        ax.set_facecolor("#f0f0f0")
+                        continue
+
+                    data = cutout.data.copy()
+                    # Normalização por percentis (robusto a outliers)
+                    valid = data[np.isfinite(data)]
+                    if len(valid) > 0:
+                        vmin = np.percentile(valid, 1)
+                        vmax = np.percentile(valid, 99)
+                    else:
+                        vmin, vmax = 0, 1
+
+                    ax.imshow(
+                        data,
+                        origin="lower",
+                        cmap=cmap,
+                        vmin=vmin,
+                        vmax=vmax,
+                        interpolation="nearest",
                     )
-                    ax.set_facecolor("#f0f0f0")
-                    continue
 
-                data = cutout.data.copy()
-                # Normalização por percentis (robusto a outliers)
-                valid = data[np.isfinite(data)]
-                if len(valid) > 0:
-                    vmin = np.percentile(valid, 1)
-                    vmax = np.percentile(valid, 99)
-                else:
-                    vmin, vmax = 0, 1
+                    # Marca centro do candidato com retículo
+                    cy, cx = np.array(data.shape) / 2
+                    ax.plot(
+                        cx, cy, "+", color="red",
+                        markersize=8, markeredgewidth=0.8,
+                    )
 
-                ax.imshow(
-                    data,
-                    origin="lower",
-                    cmap=cmap,
-                    vmin=vmin,
-                    vmax=vmax,
-                    interpolation="nearest",
-                )
-
-                # Marca centro do candidato com retículo
-                cy, cx = np.array(data.shape) / 2
-                ax.plot(
-                    cx, cy, "+", color="red",
-                    markersize=8, markeredgewidth=0.8,
-                )
-
-        plt.suptitle(
-            "Vetação de Candidatos — Grade Temporal",
-            fontsize=12, fontweight="bold", y=1.02,
-        )
-        plt.tight_layout()
-
-        if save_path:
-            fig.savefig(
-                str(save_path), dpi=150,
-                bbox_inches="tight", facecolor="white",
+            plt.suptitle(
+                "Vetação de Candidatos — Grade Temporal",
+                fontsize=12, fontweight="bold", y=1.02,
             )
-            logger.info(f"Grade de vetação salva em: {save_path}")
+            plt.tight_layout()
 
-        plt.show()
+            if save_path:
+                fig.savefig(
+                    str(save_path), dpi=150,
+                    bbox_inches="tight", facecolor="white",
+                )
+                logger.info(f"Grade de vetação salva em: {save_path}")
+
+            # Fecha explicitamente a figura para liberar recursos
+            plt.close(fig)
+
+        except Exception as e:
+            logger.error(f"Erro ao plotar grade de vetação: {e}")

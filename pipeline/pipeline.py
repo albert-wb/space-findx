@@ -132,91 +132,185 @@ class SpaceFindXPipeline:
         Tuple[Optional[Path], List[Tracklet]]
             Caminho do arquivo ADES XML gerado e lista de tracklets confirmados.
         """
+        self.last_candidates = []
+        self.last_wcs = {}
 
         def log(level: str, msg: str):
             getattr(logger, level.lower())(msg)
             if log_callback:
                 log_callback(level, msg)
 
-        output_dir.mkdir(parents=True, exist_ok=True)
-        log("info", "="*60)
-        log("info", "space-findx Pipeline Iniciado")
-        log("info", "="*60)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            log("info", "="*60)
+            log("info", "space-findx Pipeline Iniciado")
+            log("info", "="*60)
 
-        # ─── ETAPA 1: CARREGAMENTO E CALIBRAÇÃO ─────────────────────
-        log("info", "[1/6] Carregando série de imagens FITS...")
-        loader = FITSSeriesLoader(science_dir)
-        fits_paths = loader.load_sorted()
-        log("info", f"     {len(fits_paths)} frames encontrados.")
+            # ─── ETAPA 1: CARREGAMENTO E CALIBRAÇÃO ─────────────────────
+            log("info", "[1/6] Carregando série de imagens FITS...")
+            try:
+                loader = FITSSeriesLoader(science_dir)
+                fits_paths = loader.load_sorted()
+            except Exception as e:
+                log("error", f"Erro fatal ao carregar arquivos FITS de {science_dir}: {e}")
+                return None, []
 
-        log("info", "[1/6] Calibrando imagem de referência...")
-        ref_calibrated, ref_hot_mask = self.calibrator.calibrate(reference_fits)
+            log("info", f"     {len(fits_paths)} frames encontrados.")
 
-        calibrated_frames = []
-        hot_masks = []
-        for i, fp in enumerate(fits_paths):
-            log("info", f"     Calibrando frame {i+1}/{len(fits_paths)}: {fp.name}")
-            cal, hot = self.calibrator.calibrate(fp)
-            calibrated_frames.append(cal)
-            hot_masks.append(hot)
+            log("info", "[1/6] Calibrando imagem de referência...")
+            try:
+                ref_calibrated, ref_hot_mask = self.calibrator.calibrate(reference_fits)
+            except Exception as e:
+                log("error", f"Erro fatal ao calibrar imagem de referência {reference_fits.name}: {e}")
+                return None, []
 
-        # ─── ETAPA 2: ALINHAMENTO ASTROMÉTRICO ──────────────────────
-        log("info", "[2/6] Alinhando frames ao sistema de referência WCS...")
-        aligned_frames = []
-        frame_wcs: Dict[int, WCS] = {}
-        frame_times: Dict[int, Time] = {}
+            calibrated_frames = []
+            hot_masks = []
+            valid_fits_paths = []
+            for i, fp in enumerate(fits_paths):
+                log("info", f"     Calibrando frame {i+1}/{len(fits_paths)}: {fp.name}")
+                try:
+                    cal, hot = self.calibrator.calibrate(fp)
+                    calibrated_frames.append(cal)
+                    hot_masks.append(hot)
+                    valid_fits_paths.append(fp)
+                except Exception as e:
+                    log("error", f"     Erro ao calibrar frame {fp.name}: {e}. O frame será ignorado.")
 
-        for i, cal in enumerate(calibrated_frames):
-            log("info", f"     Alinhando frame {i+1}/{len(calibrated_frames)}...")
-            aligned = self.aligner.align_to_reference(cal, ref_calibrated)
-            aligned_frames.append(aligned)
-            frame_wcs[i] = WCS(aligned.header)
-            # Extrai tempo de observação do cabeçalho
-            date_obs = cal.header.get("DATE-OBS", "2000-01-01T00:00:00.0")
-            frame_times[i] = Time(date_obs, format="isot", scale="utc")
+            if not calibrated_frames:
+                log("error", "Nenhum frame de ciência pôde ser calibrado com sucesso. Pipeline abortado.")
+                return None, []
 
-        # ─── ETAPA 3: SUBTRAÇÃO ZOGY ────────────────────────────────
-        log("info", "[3/6] Executando subtração ZOGY (Proper Image Subtraction)...")
-        diff_images = []
-        scorr_images = []
-        for i, al in enumerate(aligned_frames):
-            log("info", f"     Subtraindo frame {i+1}/{len(aligned_frames)}...")
-            D, S = self.subtractor.subtract(al, ref_calibrated)
-            diff_images.append(D)
-            scorr_images.append(S)
+            # ─── ETAPA 2: ALINHAMENTO ASTROMÉTRICO ──────────────────────
+            log("info", "[2/6] Alinhando frames ao sistema de referência WCS...")
+            aligned_frames = []
+            frame_wcs: Dict[int, WCS] = {}
+            frame_times: Dict[int, Time] = {}
+            
+            for i, cal in enumerate(calibrated_frames):
+                fp_name = valid_fits_paths[i].name
+                log("info", f"     Alinhando frame {i+1}/{len(calibrated_frames)}: {fp_name}...")
+                try:
+                    aligned = self.aligner.align_to_reference(cal, ref_calibrated)
+                    aligned_frames.append(aligned)
+                except Exception as e:
+                    log("warning", f"     Erro no alinhamento do frame {fp_name}: {e}. Usando frame sem alinhamento...")
+                    aligned = cal
+                    aligned_frames.append(aligned)
+                
+                try:
+                    import warnings
+                    from astropy.wcs import FITSFixedWarning
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore', FITSFixedWarning)
+                        frame_wcs[i] = WCS(aligned.header)
+                except Exception as e:
+                    log("warning", f"     WCS do frame {fp_name} é inválido ({e}). Criando WCS trivial (1 pixel = 1 arcsec) para permitir linkagem.")
+                    w = WCS(naxis=2)
+                    w.wcs.crval = [0, 0]
+                    w.wcs.crpix = [1, 1]
+                    w.wcs.cdelt = [1.0/3600.0, 1.0/3600.0]
+                    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+                    frame_wcs[i] = w
+                    
+                # Extrai tempo de observação do cabeçalho
+                date_obs = cal.header.get("DATE-OBS", "2000-01-01T00:00:00.0")
+                try:
+                    frame_times[i] = Time(date_obs, format="isot", scale="utc")
+                except Exception as e:
+                    log("warning", f"     Erro ao analisar data DATE-OBS '{date_obs}' do frame {fp_name}: {e}. Usando data padrão J2000.")
+                    frame_times[i] = Time("2000-01-01T00:00:00.0", format="isot", scale="utc")
 
-        # ─── ETAPA 4: DETECÇÃO E VETAÇÃO ────────────────────────────
-        log("info", "[4/6] Detectando fontes e aplicando filtros morfológicos...")
-        frame_candidates = {}
-        for i, scorr in enumerate(scorr_images):
-            candidates = self.detector.detect(
-                scorr, hot_pixel_mask=hot_masks[i], frame_index=i
-            )
-            valid = [c for c in candidates if c.is_valid]
-            frame_candidates[i] = valid
-            log(
-                "info",
-                f"     Frame {i+1}: {len(valid)} candidatos válidos "
-                f"(de {len(candidates)} detectados)",
-            )
+            # ─── ETAPA 3: SUBTRAÇÃO ZOGY ────────────────────────────────
+            log("info", "[3/6] Executando subtração ZOGY (Proper Image Subtraction)...")
+            diff_images = []
+            scorr_images = []
+            final_fits_paths = []
+            final_hot_masks = []
+            final_frame_wcs = {}
+            final_frame_times = {}
+            
+            final_idx = 0
+            for i, al in enumerate(aligned_frames):
+                fp_name = valid_fits_paths[i].name
+                log("info", f"     Subtraindo frame {i+1}/{len(aligned_frames)}: {fp_name}...")
+                try:
+                    D, S = self.subtractor.subtract(al, ref_calibrated)
+                    diff_images.append(D)
+                    scorr_images.append(S)
+                    final_fits_paths.append(valid_fits_paths[i])
+                    final_hot_masks.append(hot_masks[i])
+                    final_frame_wcs[final_idx] = frame_wcs[i]
+                    final_frame_times[final_idx] = frame_times[i]
+                    final_idx += 1
+                except Exception as e:
+                    log("error", f"     Erro na subtração ZOGY do frame {fp_name}: {e}. O frame será ignorado.")
 
-        # ─── ETAPA 5: LINKAGEM DE TRAJETÓRIA ────────────────────────
-        log("info", "[5/6] Linkando trajetórias cinemáticas...")
-        tracklets = self.linker.link_tracklets(frame_candidates, frame_wcs, frame_times)
-        log("info", f"     {len(tracklets)} tracklets confirmadas (χ²_red < {self.linker.max_chi2}).")
+            if not scorr_images:
+                log("error", "Nenhum frame restou após a subtração ZOGY. Pipeline abortado.")
+                return None, []
 
-        if not tracklets:
-            log("warning", "Nenhuma tracklet confirmada. Encerrando sem exportação.")
+            # ─── ETAPA 4: DETECÇÃO E VETAÇÃO ────────────────────────────
+            log("info", "[4/6] Detectando fontes e aplicando filtros morfológicos...")
+            frame_candidates = {}
+            all_detected_candidates = []
+            for i, scorr in enumerate(scorr_images):
+                fp_name = final_fits_paths[i].name
+                try:
+                    candidates = self.detector.detect(
+                        scorr, hot_pixel_mask=final_hot_masks[i], frame_index=i
+                    )
+                    valid = [c for c in candidates if c.is_valid]
+                    frame_candidates[i] = valid
+                    all_detected_candidates.extend(candidates)
+                    log(
+                        "info",
+                        f"     Frame {i+1} ({fp_name}): {len(valid)} candidatos válidos "
+                        f"(de {len(candidates)} detectados)",
+                    )
+                except Exception as e:
+                    log("error", f"     Erro na detecção de transientes no frame {fp_name}: {e}. Frame ignorado.")
+                    frame_candidates[i] = []
+
+            # Armazena os candidatos e WCS para consumo pela GUI
+            self.last_candidates = all_detected_candidates
+            self.last_wcs = final_frame_wcs
+
+            # ─── ETAPA 5: LINKAGEM DE TRAJETÓRIA ────────────────────────
+            log("info", "[5/6] Linkando trajetórias cinemáticas...")
+            try:
+                tracklets = self.linker.link_tracklets(frame_candidates, final_frame_wcs, final_frame_times)
+            except Exception as e:
+                log("error", f"Erro na linkagem de trajetórias: {e}")
+                tracklets = []
+                
+            log("info", f"     {len(tracklets)} tracklets confirmadas (χ²_red < {self.linker.max_chi2}).")
+
+            if not tracklets:
+                log("warning", "Nenhuma tracklet confirmada. Encerrando sem exportação.")
+                log("info", "="*60)
+                log("info", "Pipeline concluído. 0 NEO(s)/transiente(s) reportado(s).")
+                log("info", "="*60)
+                return None, []
+
+            # ─── ETAPA 6: EXPORTAÇÃO ADES ───────────────────────────────
+            log("info", "[6/6] Exportando para formato ADES XML...")
+            try:
+                obs_date = final_frame_times[0].strftime("%Y-%m-%d")
+                ades_path = output_dir / f"ades_submission_{obs_date}_{self.exporter.obs_code}.xml"
+                self.exporter.export(tracklets, ades_path)
+                log("info", f"     Arquivo ADES salvo em: {ades_path}")
+            except Exception as e:
+                log("error", f"Erro ao exportar arquivo ADES XML: {e}")
+                ades_path = None
+
+            log("info", "="*60)
+            log("info", f"Pipeline concluído. {len(tracklets)} NEO(s)/transiente(s) reportado(s).")
+            log("info", "="*60)
+            return ades_path, tracklets
+
+        except Exception as e:
+            log("error", f"Erro crítico e inesperado na execução do pipeline: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return None, []
-
-        # ─── ETAPA 6: EXPORTAÇÃO ADES ───────────────────────────────
-        log("info", "[6/6] Exportando para formato ADES XML...")
-        obs_date = frame_times[0].strftime("%Y-%m-%d")
-        ades_path = output_dir / f"ades_submission_{obs_date}_{self.exporter.obs_code}.xml"
-        self.exporter.export(tracklets, ades_path)
-        log("info", f"     Arquivo ADES salvo em: {ades_path}")
-
-        log("info", "="*60)
-        log("info", f"Pipeline concluído. {len(tracklets)} NEO(s)/transiente(s) reportado(s).")
-        log("info", "="*60)
-        return ades_path, tracklets
