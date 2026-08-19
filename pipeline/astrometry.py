@@ -11,6 +11,8 @@ from astropy.wcs import WCS
 from astropy.nddata import CCDData
 import numpy as np
 
+from .fits_utils import effective_wcs
+
 try:
     from reproject import reproject_interp
 except ImportError:
@@ -48,19 +50,31 @@ class AstrometricAligner:
         """
         logger.info("Iniciando alinhamento astrométrico...")
         
+        # `effective_wcs` consulta primeiro o atributo `.wcs` do CCDData: ao ler
+        # o arquivo, o astropy move as chaves de WCS do header para lá, e
+        # reconstruir com `WCS(image.header)` devolveria um WCS vazio — fazendo
+        # o alinhamento cair sempre no fallback sem reprojeção.
         try:
-            import warnings
-            from astropy.wcs import FITSFixedWarning
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore', FITSFixedWarning)
-                wcs_in = WCS(image.header)
-                wcs_out = WCS(reference.header)
-                has_wcs = wcs_in.has_celestial and wcs_out.has_celestial
+            wcs_in = effective_wcs(image)
+            wcs_out = effective_wcs(reference)
+            has_wcs = wcs_in is not None and wcs_out is not None
         except Exception as e:
             logger.warning(f"Cabeçalho FITS com WCS inválido ({e}). Pulando reprojeção WCS...")
             wcs_in = None
             wcs_out = None
             has_wcs = False
+
+        if not has_wcs:
+            missing = []
+            if wcs_in is None:
+                missing.append("imagem de ciência")
+            if wcs_out is None:
+                missing.append("imagem de referência")
+            logger.warning(
+                "Sem solução astrométrica em: %s. As posições dos candidatos "
+                "não poderão ser convertidas para RA/Dec absolutas.",
+                " e ".join(missing),
+            )
         
         # Usar reproject se ele estiver instalado e tivermos informações WCS válidas
         if reproject_interp and has_wcs:

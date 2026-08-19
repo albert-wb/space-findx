@@ -36,6 +36,8 @@ from astropy.stats import sigma_clipped_stats
 import astropy.units as u
 import ccdproc
 
+from .fits_utils import find_fits_files, read_fits_header
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,6 +72,9 @@ class InstrumentalCalibrator:
         correta das unidades de ruído.
     read_noise : float
         Ruído de leitura do detector em elétrons (e-).
+    max_hot_area : int
+        Número máximo de pixels conexos que um defeito de detector pode ter.
+        Aglomerados maiores são considerados fontes reais (PSF) e preservados.
     """
 
     def __init__(
@@ -80,8 +85,12 @@ class InstrumentalCalibrator:
         hot_pixel_sigma: float = 5.0,
         gain: float = 1.0,
         read_noise: float = 10.0,
+        max_hot_area: int = 3,
     ):
         self.hot_pixel_sigma = hot_pixel_sigma
+        # Área máxima (em pixels conexos) de um defeito de detector. Acima
+        # disso o aglomerado é tratado como fonte astronômica real.
+        self.max_hot_area = max(1, int(max_hot_area))
         self.gain = gain * u.electron / u.adu
         self.read_noise = read_noise * u.electron
 
@@ -125,23 +134,69 @@ class InstrumentalCalibrator:
 
     def _identify_hot_pixels(self, data: np.ndarray) -> np.ndarray:
         """
-        Identifica hot pixels usando estatística sigma-clipped.
-        ...
+        Identifica hot pixels e raios cósmicos por desvio LOCAL e isolamento.
+
+        Um hot pixel é um defeito do detector: um pixel isolado que destoa dos
+        seus vizinhos imediatos. Uma fonte astronômica real, ao contrário, é
+        convoluída pela PSF e se espalha por vários pixels contíguos.
+
+        Um limiar global do tipo ``data > mediana + Nσ`` não distingue os dois
+        casos e marca como "hot" o núcleo de toda estrela e todo transiente do
+        campo — os pixels são depois zerados no mapa de significância, de modo
+        que o objeto que o pipeline procura desaparece antes da detecção. Por
+        isso o teste é feito em duas etapas:
+
+            1. **Desvio local** — resíduo em relação à mediana 3×3 do entorno,
+               comparado ao ruído robusto do próprio resíduo. Isso remove a
+               dependência do brilho absoluto: um pixel quente no meio de uma
+               estrela brilhante continua sendo detectável.
+            2. **Isolamento morfológico** — apenas grupos conexos com poucos
+               pixels sobrevivem. Uma PSF com FWHM ~3 px gera um aglomerado
+               bem maior que ``max_hot_area`` e é preservada.
+
+        Returns
+        -------
+        np.ndarray
+            Máscara booleana (True = pixel defeituoso a ser ignorado).
         """
         try:
-            _, median_sc, std_sc = sigma_clipped_stats(data, sigma=3.0, maxiters=10)
-            threshold = median_sc + self.hot_pixel_sigma * std_sc
-            hot_mask = data > threshold
-            n_hot = np.sum(hot_mask)
+            from scipy.ndimage import label, median_filter
+
+            # (1) Resíduo em relação à vizinhança imediata
+            local_median = median_filter(data, size=3, mode="nearest")
+            residual = data - local_median
+
+            _, res_median, res_std = sigma_clipped_stats(residual, sigma=3.0, maxiters=10)
+            if not np.isfinite(res_std) or res_std <= 0:
+                logger.warning("Ruído do resíduo local inválido. Máscara de hot pixels vazia.")
+                return np.zeros(data.shape, dtype=bool)
+
+            threshold = res_median + self.hot_pixel_sigma * res_std
+            candidate_mask = residual > threshold
+
+            # (2) Isolamento: descarta aglomerados grandes (= fontes reais)
+            labels, n_groups = label(candidate_mask)
+            hot_mask = np.zeros(data.shape, dtype=bool)
+            if n_groups > 0:
+                # bincount[0] conta o fundo; as demais posições são as áreas
+                areas = np.bincount(labels.ravel())
+                isolated_labels = np.flatnonzero(areas <= self.max_hot_area)
+                isolated_labels = isolated_labels[isolated_labels != 0]
+                if isolated_labels.size:
+                    hot_mask = np.isin(labels, isolated_labels)
+
+            n_hot = int(np.sum(hot_mask))
+            n_rejected = int(np.sum(candidate_mask)) - n_hot
             logger.info(
                 f"Hot pixels identificados: {n_hot} "
                 f"({100*n_hot/data.size:.4f}% do frame) | "
-                f"Limiar: {threshold:.2f} ADU"
+                f"Limiar local: {threshold:.2f} ADU | "
+                f"{n_rejected} pixels preservados por pertencerem a fontes extensas"
             )
             return hot_mask
         except Exception as e:
             logger.warning(f"Falha ao identificar hot pixels ({e}). Retornando máscara vazia.")
-            return np.zeros_like(data, dtype=bool)
+            return np.zeros(data.shape, dtype=bool)
 
     def calibrate(self, raw_fits_path: Path) -> Tuple[CCDData, np.ndarray]:
         """
@@ -232,8 +287,12 @@ class FITSSeriesLoader:
         Padrão glob para filtragem de arquivos (padrão: '*.fits').
     """
 
-    def __init__(self, directory: Path, pattern: str = "*.fits"):
-        self.directory = directory
+    def __init__(self, directory: Path, pattern: Optional[str] = None):
+        self.directory = Path(directory)
+        # pattern=None (padrão) delega a descoberta a `fits_utils.find_fits_files`,
+        # que reconhece .fits/.fit/.fts e as variantes comprimidas .fz/.gz.
+        # Um glob fixo como "*.fits" descartava silenciosamente arquivos que a
+        # interface Web já havia aceitado e listado na galeria.
         self.pattern = pattern
 
     def load_sorted(self) -> List[Path]:
@@ -248,17 +307,22 @@ class FITSSeriesLoader:
         List[Path]
             Lista de caminhos FITS ordenada por tempo de observação.
         """
-        fits_files = list(self.directory.glob(self.pattern))
+        if self.pattern:
+            fits_files = [p for p in self.directory.glob(self.pattern) if p.is_file()]
+        else:
+            fits_files = find_fits_files(self.directory)
+
         if not fits_files:
             raise FileNotFoundError(
                 f"Nenhum arquivo FITS encontrado em {self.directory} "
-                f"com padrão '{self.pattern}'"
+                f"(extensões aceitas: .fits, .fit, .fts, .fits.fz, .fits.gz)"
             )
 
         def sort_key(p: Path) -> str:
+            # read_fits_header tolera MEF/comprimidos, onde a HDU 0 é um stub
+            # vazio e o DATE-OBS científico mora numa extensão.
             try:
-                hdr = fits.getheader(str(p))
-                return hdr.get("DATE-OBS", p.stem)
+                return str(read_fits_header(p).get("DATE-OBS", p.stem))
             except Exception:
                 return p.stem
 

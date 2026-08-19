@@ -62,18 +62,68 @@ pip install -r requirements.txt
 
 ## Uso Rápido
 
-### Interface Web (GUI principal)
+### Verificar a instalação com dados de exemplo
 
-Abra o arquivo `index.html` em qualquer navegador moderno:
+Antes de usar dados reais, confirme que o pipeline funciona de ponta a ponta.
+O script gera um conjunto FITS sintético (5 frames de ciência + 1 referência)
+contendo um objeto em movimento com taxa **conhecida**, roda o pipeline
+completo e compara o resultado com o valor injetado:
 
 ```bash
-# Windows
-start index.html
-
-# Linux/macOS
-xdg-open index.html   # Linux
-open index.html       # macOS
+python verificar_instalacao.py
 ```
+
+Saída esperada:
+
+```
+[3/3] Conferindo o resultado...
+      Recuperado: mu_ra=-41.99"/hr (erro 0.01), mu_dec=27.01"/hr (erro 0.01)
+      chi2_red=0.00064 em 5 frames
+      ADES exportado: ades_submission_2024-01-17_W86.xml
+RESULTADO: OK - pipeline funcionando de ponta a ponta.
+```
+
+Os arquivos são criados em um diretório temporário e removidos ao final — nada
+em `dados/` é tocado. Para escrever o mesmo dataset em `dados/` e explorá-lo na
+interface:
+
+```bash
+python -m pipeline.sample_data
+```
+
+### Interface Web (GUI principal)
+
+Suba o backend e abra a interface que ele mesmo serve:
+
+```bash
+npm run backend          # ou: uvicorn server:app --reload
+# depois abra http://localhost:8000
+```
+
+Servir a interface pelo próprio backend faz a página e a API compartilharem a
+mesma origem, o que mantém o app funcional quando ele é acessado de outra
+máquina da rede ou através de um túnel (`npm run tunnel`).
+
+O modo de desenvolvimento com Vite continua disponível (`npm start`): nesse
+caso a página roda em `localhost:5173` e fala com o backend em
+`localhost:8000`.
+
+#### Carregando os dados de entrada
+
+| Botão | O que faz |
+|---|---|
+| **+ LOAD SCIENCE FRAMES** | Lê os FITS já presentes em `dados/ciencia/` |
+| **⇪ UPLOAD LOCAL .FIT(S)** | Envia arquivos do seu computador para a pasta correspondente |
+| **+ LOAD REFERENCE FRAME** | Lê os FITS de `dados/referencia/` |
+| **◈ CARREGAR FITS DE EXEMPLO** | Gera o dataset sintético de demonstração e o carrega nas galerias |
+
+Extensões aceitas no upload: `.fits`, `.fit`, `.fts` e os comprimidos
+`.fits.fz` (Rice) e `.fits.gz`. Arquivos vazios ou que não sejam FITS legíveis
+são rejeitados com o motivo exibido no log — nunca salvos silenciosamente.
+
+Se já houver arquivos seus nas pastas de entrada quando o dataset de exemplo
+for carregado, a interface pergunta antes de movê-los para
+`dados/arquivados_<data>/`. Os arquivos são **movidos, nunca apagados**.
 
 A interface web contém **4 abas**:
 
@@ -105,7 +155,7 @@ with open("config/pipeline_config.yaml") as f:
 pipeline = SpaceFindXPipeline(config)
 ades_path = pipeline.run(
     science_dir=Path("dados/ciencia/"),
-    reference_fits=Path("dados/referencia.fits"),
+    reference_fits=Path("dados/referencia/reference.fits"),
     output_dir=Path("saida/"),
 )
 
@@ -138,8 +188,14 @@ space-findx/
 │   ├── subtraction.py          # Subtração ZOGY
 │   ├── detection.py            # Detecção de fontes (DAOStarFinder)
 │   ├── trajectory.py           # Linkagem de trajetórias
-│   └── ades_exporter.py        # Exportação ADES XML (MPC)
-├── dados/                      # Diretório de dados de entrada (FITS)
+│   ├── ades_exporter.py        # Exportação ADES XML (MPC)
+│   ├── fits_utils.py           # Descoberta/leitura robusta de FITS e WCS
+│   ├── sample_data.py          # Gerador do dataset sintético de demonstração
+│   └── reference_fetcher.py    # Download automático de referência (SkyView/DSS)
+├── verificar_instalacao.py     # Teste de ponta a ponta com dados de exemplo
+├── dados/
+│   ├── ciencia/                # Frames de ciência (FITS)
+│   └── referencia/             # Frame(s) de referência (FITS)
 ├── output/                     # Diretório padrão de saída
 └── saida/                      # Saída alternativa (batch)
 ```
@@ -215,3 +271,57 @@ O pipeline gera na pasta de saída:
 ## Licença
 
 MIT — Veja `LICENSE` para detalhes.
+
+---
+
+## Solução de Problemas
+
+### "Não consigo adicionar meu arquivo FITS de referência"
+
+A causa mais comum é a extensão. O upload aceita `.fits`, `.fit`, `.fts` e os
+comprimidos `.fits.fz` e `.fits.gz` — arquivos de levantamentos como
+Pan-STARRS, LCO e DECam costumam vir como `.fits.fz`. Se o arquivo for
+rejeitado, o motivo exato aparece no log do sistema (aba **[T] SYSTEM LOGS**) e
+no alerta: extensão não reconhecida, arquivo de 0 byte ou cabeçalho FITS
+ilegível.
+
+Um arquivo que aparece na pasta mas não na galeria indica cabeçalho corrompido;
+nesse caso ele é listado com o erro em vez de ser omitido.
+
+### "A galeria diz que a pasta está vazia, mas o arquivo está lá"
+
+Verifique se o backend está no ar (`npm run backend`). A interface distingue
+três situações e informa qual delas ocorreu: backend inacessível, backend
+respondeu com erro (mostra a mensagem do servidor) e pasta realmente vazia.
+
+### Frames com WCS que o astropy rejeita
+
+Alguns arquivos trazem, ao lado de um WCS válido, palavras-chave de convenções
+antigas (`CNPIX1`/`CNPIX2` do formato DSS, por exemplo). A wcslib aborta com
+`SingularMatrixError: PCi_ja matrix is singular` e o astropy descarta o WCS
+inteiro. O pipeline detecta esse caso e reconstrói o WCS apenas com as
+palavras-chave do padrão FITS (preservando CD/PC, PV e distorção SIP),
+registrando no log quando isso acontece.
+
+### Muitas tracklets "confirmadas" em dados reais
+
+Um campo real produz pouquíssimos objetos em movimento. Dezenas de tracklets
+quase sempre significam falsos positivos, tipicamente por:
+
+- **Referência inadequada** — uma placa DSS baixada automaticamente é rasa
+  demais para servir de template a um frame moderno e profundo; o resíduo da
+  subtração fica dominado por artefatos.
+- **`max_speed_arcsec_hr` alto demais** — o padrão de 7200"/hr dá um raio de
+  busca que cobre o campo inteiro, permitindo encadear detecções não
+  relacionadas.
+
+O pipeline emite um aviso explícito quando a colheita é implausível. **Sempre
+inspecione visualmente os candidatos antes de submeter ao MPC.**
+
+### Referência baixada automaticamente é grosseira demais
+
+Quando não há frame em `dados/referencia/`, o pipeline baixa um recorte DSS via
+SkyView com amostragem compatível com o frame de ciência. Se a referência ainda
+assim for mais grosseira, ela é reprojetada para a grade da ciência (e não o
+contrário), preservando a resolução das imagens de entrada. O log informa o
+fator de diferença de escala.

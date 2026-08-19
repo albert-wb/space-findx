@@ -166,12 +166,20 @@ class TransientDetector:
         """
         scorr = scorr.astype(np.float64)
 
-        # Aplica máscara de hot pixels: seta para -999 para não detectar
-        if hot_pixel_mask is not None:
+        # Máscara de hot pixels: os pixels defeituosos são substituídos pela
+        # MEDIANA do frame (não por -999). Cravar um valor muito negativo
+        # criaria um degrau artificial de dezenas de sigma nas bordas do
+        # defeito, que o DAOStarFinder interpreta como fonte e que contamina
+        # as estatísticas de fundo. A máscara também é repassada ao
+        # DAOStarFinder, que sabe ignorar os pixels nativamente.
+        if hot_pixel_mask is not None and np.any(hot_pixel_mask):
             scorr_clean = scorr.copy()
-            scorr_clean[hot_pixel_mask] = -999.0
+            fill_value = float(np.median(scorr[~hot_pixel_mask])) if np.any(~hot_pixel_mask) else 0.0
+            scorr_clean[hot_pixel_mask] = fill_value
+            dao_mask = hot_pixel_mask
         else:
             scorr_clean = scorr
+            dao_mask = None
 
         # Calcula fundo local do S_corr (deve ser ~0 por construção ZOGY)
         try:
@@ -198,7 +206,7 @@ class TransientDetector:
                 brightest=None,  # sem limite de número de fontes
                 peakmax=None,
             )
-            sources = dao(scorr_clean - median_sc)
+            sources = dao(scorr_clean - median_sc, mask=dao_mask)
         except Exception as e:
             logger.error(f"Erro fatal no DAOStarFinder ({e}). Pulando detecção no frame {frame_index}.")
             return []

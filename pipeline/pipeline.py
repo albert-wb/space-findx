@@ -14,6 +14,7 @@ from astropy.time import Time
 from astropy.wcs import WCS
 
 from .calibration import FITSSeriesLoader, InstrumentalCalibrator
+from .fits_utils import effective_wcs
 from .astrometry import AstrometricAligner
 from .subtraction import ZOGYSubtractor
 from .detection import TransientDetector
@@ -99,6 +100,19 @@ class SpaceFindXPipeline:
         return Path(p) if p else None
 
     @staticmethod
+    def _pixel_scale_arcsec(ccd) -> Optional[float]:
+        """Escala de placa média do frame em arcsec/pixel, ou None sem WCS."""
+        wcs = effective_wcs(ccd)
+        if wcs is None:
+            return None
+        try:
+            from astropy.wcs.utils import proj_plane_pixel_scales
+            scales = proj_plane_pixel_scales(wcs.celestial) * 3600.0
+            return float(sum(scales) / len(scales))
+        except Exception:
+            return None
+
+    @staticmethod
     def _setup_logging():
         logging.basicConfig(
             level=logging.INFO,
@@ -181,6 +195,31 @@ class SpaceFindXPipeline:
                 log("error", "Nenhum frame de ciência pôde ser calibrado com sucesso. Pipeline abortado.")
                 return None, []
 
+            # ─── ETAPA 1.5: ESCOLHA DA GRADE COMUM ──────────────────────
+            # Todos os frames acabam reamostrados na grade da referência. Se a
+            # referência for mais grosseira que a ciência — o caso típico de um
+            # recorte DSS baixado automaticamente, dezenas de vezes mais
+            # grosseiro que um frame moderno —, essa reamostragem descarta quase
+            # toda a resolução antes da subtração e nenhum objeto sobrevive à
+            # detecção. Nesse caso invertemos: é a REFERÊNCIA que é reprojetada
+            # para a grade da ciência.
+            ref_scale = self._pixel_scale_arcsec(ref_calibrated)
+            sci_scale = self._pixel_scale_arcsec(calibrated_frames[0])
+            if ref_scale and sci_scale and ref_scale > 1.5 * sci_scale:
+                log(
+                    "warning",
+                    f"     Referência é {ref_scale / sci_scale:.1f}x mais grosseira que a ciência "
+                    f"({ref_scale:.2f}\"/px vs {sci_scale:.2f}\"/px). Reprojetando a REFERÊNCIA "
+                    f"para a grade da ciência para não descartar resolução.",
+                )
+                try:
+                    ref_calibrated = self.aligner.align_to_reference(
+                        ref_calibrated, calibrated_frames[0]
+                    )
+                    ref_hot_mask = self.calibrator._identify_hot_pixels(ref_calibrated.data)
+                except Exception as e:
+                    log("warning", f"     Falha ao reprojetar a referência: {e}. Mantendo a grade original.")
+
             # ─── ETAPA 2: ALINHAMENTO ASTROMÉTRICO ──────────────────────
             log("info", "[2/6] Alinhando frames ao sistema de referência WCS...")
             aligned_frames = []
@@ -198,14 +237,20 @@ class SpaceFindXPipeline:
                     aligned = cal
                     aligned_frames.append(aligned)
                 
+                # O WCS é lido de `aligned.wcs` quando disponível: o astropy
+                # retira as chaves de WCS do header ao carregar o CCDData, de
+                # modo que `WCS(aligned.header)` devolveria um WCS sem eixos
+                # celestes e a linkagem falharia com coordenadas inválidas.
+                resolved_wcs = None
                 try:
-                    import warnings
-                    from astropy.wcs import FITSFixedWarning
-                    with warnings.catch_warnings():
-                        warnings.simplefilter('ignore', FITSFixedWarning)
-                        frame_wcs[i] = WCS(aligned.header)
+                    resolved_wcs = effective_wcs(aligned)
                 except Exception as e:
-                    log("warning", f"     WCS do frame {fp_name} é inválido ({e}). Criando WCS trivial (1 pixel = 1 arcsec) para permitir linkagem.")
+                    log("warning", f"     Erro ao resolver o WCS do frame {fp_name}: {e}")
+
+                if resolved_wcs is not None:
+                    frame_wcs[i] = resolved_wcs
+                else:
+                    log("warning", f"     Frame {fp_name} não tem solução astrométrica (WCS). Criando WCS trivial (1 pixel = 1 arcsec) para permitir linkagem — as coordenadas RA/Dec exportadas NÃO serão astrometricamente válidas.")
                     w = WCS(naxis=2)
                     w.wcs.crval = [0, 0]
                     w.wcs.crpix = [1, 1]
@@ -285,6 +330,22 @@ class SpaceFindXPipeline:
                 tracklets = []
                 
             log("info", f"     {len(tracklets)} tracklets confirmadas (χ²_red < {self.linker.max_chi2}).")
+
+            # Um levantamento real produz pouquíssimos objetos em movimento por
+            # campo. Uma colheita grande quase sempre significa que o resíduo da
+            # subtração está dominado por artefatos — tipicamente uma referência
+            # rasa demais (uma placa DSS contra um frame moderno e profundo) —
+            # e que o raio de busca cinemático está encadeando ruído. Sinalizamos
+            # em vez de deixar o usuário reportar isso como astrometria válida.
+            if len(tracklets) > max(5, len(scorr_images)):
+                log(
+                    "warning",
+                    f"     ATENÇÃO: {len(tracklets)} tracklets em {len(scorr_images)} frames é um número "
+                    f"implausivelmente alto para um campo real. Provavelmente são falsos positivos "
+                    f"de uma referência inadequada (rasa ou de outra época/filtro) ou de "
+                    f"max_speed_arcsec_hr={self.linker.max_speed:.0f}\"/hr, que permite encadear "
+                    f"detecções não relacionadas. Verifique visualmente antes de submeter ao MPC."
+                )
 
             if not tracklets:
                 log("warning", "Nenhuma tracklet confirmada. Encerrando sem exportação.")

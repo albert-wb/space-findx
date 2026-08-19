@@ -55,7 +55,7 @@
               <span>No .fit/.fits loaded</span>
             </div>
           </div>
-          <input type="file" id="file-upload-science" multiple accept=".fit,.fits" style="display: none;" />
+          <input type="file" id="file-upload-science" multiple accept=".fit,.fits,.fts,.fz,.gz,.FIT,.FITS,.FTS,image/fits,application/fits" style="display: none;" />
           <button class="btn btn--outline btn--full btn--sm" id="btn-load-science">
             + LOAD SCIENCE FRAMES
           </button>
@@ -80,13 +80,30 @@
               <span>Required for ZOGY</span>
             </div>
           </div>
-          <input type="file" id="file-upload-ref" accept=".fit,.fits" style="display: none;" />
+          <input type="file" id="file-upload-ref" multiple accept=".fit,.fits,.fts,.fz,.gz,.FIT,.FITS,.FTS,image/fits,application/fits" style="display: none;" />
           <button class="btn btn--outline btn--full btn--sm" id="btn-load-ref">
             + LOAD REFERENCE FRAME
           </button>
           <button class="btn btn--upload btn--full btn--sm" id="btn-upload-ref" style="margin-top: 6px;">
             ⇪ UPLOAD LOCAL .FIT(S)
           </button>
+          <p class="sidebar__hint" style="margin-top:6px">
+            Aceita .fits, .fit, .fts e comprimidos .fits.fz / .fits.gz.
+          </p>
+        </div>
+
+        <!-- Dataset sintetico de demonstracao -->
+        <div class="gallery-section" style="margin-top:12px">
+          <button class="btn btn--outline btn--full btn--sm" id="btn-sample-data"
+                  style="border-color: var(--accent-subtle); color: var(--accent-color);"
+                  title="Gera frames FITS sinteticos com um objeto em movimento conhecido">
+            ◈ CARREGAR FITS DE EXEMPLO
+          </button>
+          <p class="sidebar__hint" style="margin-top:6px">
+            Cria um conjunto FITS sintético (5 frames + referência) com um objeto
+            em movimento de taxa conhecida, para testar o pipeline de ponta a ponta
+            sem baixar dados externos.
+          </p>
         </div>
 
         <div class="calibration-row" style="margin-top:10px">

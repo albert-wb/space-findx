@@ -12,8 +12,22 @@ const state = {
   currentFilter: 'all',
 };
 
-// URL base do backend (resolve automaticamente a partir da porta do Vite)
-const API_BASE = 'http://localhost:8000';
+// URL base do backend.
+// O servidor FastAPI tambem serve index.html/app.js/style.css, entao quando a
+// pagina ja vem dele (ou de um tunel/outra maquina apontando para ele) usamos a
+// MESMA origem. Um valor fixo 'http://localhost:8000' so funciona quando o
+// navegador roda na mesma maquina do backend: por um tunel cloudflared ou pela
+// rede local ele aponta para o computador de quem acessa, e toda chamada falha.
+const API_BASE = (() => {
+  const { origin, hostname, port, protocol } = window.location;
+  if (protocol === 'file:') return 'http://localhost:8000';
+  // Servido pelo proprio backend (porta 8000) ou por um tunel/proxy remoto.
+  if (port === '8000') return origin;
+  const isLocal = ['localhost', '127.0.0.1', '[::1]', ''].includes(hostname);
+  if (!isLocal) return origin;
+  // Vite em localhost:5173 -> backend no mesmo host, porta 8000.
+  return `${protocol}//${hostname}:8000`;
+})();
 
 // ── ANALYSIS CACHE (localStorage anti-duplicação) ─────────────────────────────
 const analysisCache = {
@@ -556,28 +570,42 @@ const gallery = {
    * Carrega science frames com número dinâmico e sem duplicação.
    * NÃO reseta frames anteriores — acumula novos frames ao array existente.
    */
-  async loadScienceFrames() {
+  async loadScienceFrames({ silent = false } = {}) {
     const grid = $('gallery-science');
     const emptyMsg = $('gallery-science-empty');
 
     try {
       log('INFO', 'Buscando arquivos FITS reais no disco (dados/ciencia)...');
-      const res = await fetch(`${API_BASE}/api/frames`);
-      const data = await res.json();
-      
-      if (data.status === 'empty' || data.frames.length === 0) {
-        log('WARN', "Nenhum arquivo .fit/.fits encontrado na pasta 'dados/ciencia'.");
-        alert("Pasta 'dados/ciencia' está vazia! Coloque arquivos .fit ou .fits, ou use o botão \u21ea UPLOAD.");
-        return;
+      const data = await this.apiRequest('/api/frames');
+      const frames = Array.isArray(data.frames) ? data.frames : [];
+
+      if (frames.length === 0) {
+        log('WARN', "Nenhum arquivo FITS encontrado na pasta 'dados/ciencia'.");
+        if (!silent) {
+          alert(
+            `Pasta 'dados/ciencia' esta vazia.
+
+Use ⇪ UPLOAD LOCAL para enviar seus FITS, ou ◈ CARREGAR FITS DE EXEMPLO para gerar um conjunto de teste.`
+          );
+        }
+        return false;
       }
-      
+
+      if (data.message) log('WARN', data.message);
       emptyMsg.hidden = true;
       let addedCount = 0;
       let duplicateCount = 0;
       let analyzedCount = 0;
 
-      data.frames.forEach((f, idx) => {
+      let unreadableCount = 0;
+
+      frames.forEach((f, idx) => {
         const name = f.filename;
+        if (f.error) {
+          unreadableCount++;
+          log('ERR', `Frame ignorado: ${name} — ${f.error}`);
+          return;
+        }
         if (this.scienceFrames.some(sf => sf.name === name)) {
           duplicateCount++;
           return;
@@ -589,8 +617,12 @@ const gallery = {
           dateObs: f.date_obs,
           filter: f.filter,
           exptime: f.exptime,
-          object: 'NEO Survey',
-          dimensions: '4096x4096',
+          object: f.object || 'NEO Survey',
+          naxis1: f.naxis1,
+          naxis2: f.naxis2,
+          instrument: f.instrument,
+          telescope: f.telescope,
+          dimensions: (f.naxis1 && f.naxis2) ? `${f.naxis1}x${f.naxis2}` : '—',
           datatype: 'float64'
         };
 
@@ -626,63 +658,135 @@ const gallery = {
       log('OK', `Science gallery: +${addedCount} frames REAIS carregados (total: ${this.scienceFrames.length})`, `${addedCount}`);
       if (duplicateCount > 0) log('WARN', `${duplicateCount} frames ignorados: já presentes na galeria (anti-duplicação)`);
       if (analyzedCount > 0) log('INFO', `${analyzedCount} frames já haviam sido ✓ ANALYZED anteriormente.`);
-      log('INFO', 'Thumbnail strategy via ImageIngestor Lazy Loading (Pandas df)');
+      if (unreadableCount > 0) log('ERR', `${unreadableCount} arquivo(s) com cabecalho FITS ilegivel foram descartados.`);
+      log('INFO', 'Leitura leve de cabecalhos (lazy loading): pixels nao sao carregados nesta etapa.');
+      return addedCount > 0;
 
     } catch (e) {
       log('ERR', 'Erro ao carregar FITS do backend: ' + e.message);
-      alert("Erro ao conectar no servidor Backend (" + API_BASE + "). Verifique se 'npm start' está rodando!");
+      if (!silent) alert(e.message);
+      return false;
     }
   },
 
+  /**
+   * Faz uma requisicao ao backend distinguindo os tres tipos de falha que
+   * antes eram todos reportados como "erro de conexao":
+   *   - backend inacessivel  -> erro de rede real
+   *   - backend respondeu erro -> mostra o `detail` que o FastAPI devolveu
+   *   - backend respondeu OK  -> devolve o JSON
+   */
+  async apiRequest(path, options = {}) {
+    let res;
+    try {
+      res = await fetch(`${API_BASE}${path}`, options);
+    } catch (netErr) {
+      const err = new Error(
+        `Nao foi possivel falar com o backend em ${API_BASE}. ` +
+        `Verifique se o servidor esta rodando ('npm run backend' ou 'npm start').`
+      );
+      err.isNetwork = true;
+      throw err;
+    }
+
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+
+    if (!res.ok) {
+      const detail = (data && (data.detail || data.message)) || `HTTP ${res.status}`;
+      throw new Error(detail);
+    }
+    return data || {};
+  },
+
   /** Carrega o reference frame REAL do backend via API */
-  async loadReferenceFrame() {
+  async loadReferenceFrame({ silent = false } = {}) {
     const grid = $('gallery-ref');
     const emptyMsg = $('gallery-ref-empty');
 
     try {
       log('INFO', 'Buscando frame de referência em dados/referencia...');
-      const res = await fetch(`${API_BASE}/api/frames/reference`);
-      const data = await res.json();
+      const data = await this.apiRequest('/api/frames/reference');
+      const frames = Array.isArray(data.frames) ? data.frames : [];
 
-      if (data.status === 'empty' || data.frames.length === 0) {
-        log('WARN', "Nenhum arquivo .fit/.fits encontrado na pasta 'dados/referencia'.");
-        alert("Pasta 'dados/referencia' está vazia! Faça upload ou copie o frame de referência.");
-        return;
+      if (frames.length === 0) {
+        log('WARN', "Nenhum arquivo FITS encontrado na pasta 'dados/referencia'.");
+        if (!silent) {
+          alert(
+            `Pasta 'dados/referencia' esta vazia.
+
+Use ⇪ UPLOAD LOCAL para enviar um FITS de referencia, ou ◈ CARREGAR FITS DE EXEMPLO para gerar um conjunto de teste.`
+          );
+        }
+        return false;
       }
 
-      emptyMsg.hidden = true;
+      // Arquivos ilegíveis aparecem na lista com o motivo, em vez de sumirem.
+      if (data.message) log('WARN', data.message);
 
-      // Limpa thumbs anteriores
+      emptyMsg.hidden = true;
       grid.querySelectorAll('.gallery-thumb').forEach(t => t.remove());
 
-      // Usa o primeiro frame encontrado como referência
-      const f = data.frames[0];
-      const name = f.filename;
-      const field = this.generateThumbField(64, 64, 999);
+      // O primeiro frame (ordem alfabética, igual à do backend) é o que o
+      // pipeline usa como referência; os demais ficam visíveis na galeria.
+      let activeSet = false;
+      frames.forEach((f, idx) => {
+        if (f.error) {
+          log('ERR', `Referência ignorada: ${f.filename} — ${f.error}`);
+          return;
+        }
 
-      const metadata = {
-        dateObs: f.date_obs,
-        filter: f.filter,
-        exptime: f.exptime,
-        object: 'Reference Frame',
-        dimensions: '4096x4096',
-        datatype: 'float64'
-      };
+        const name = f.filename;
+        const field = this.generateThumbField(64, 64, 900 + idx);
+        const metadata = {
+          dateObs: f.date_obs,
+          filter: f.filter,
+          exptime: f.exptime,
+          object: f.object || 'Reference Frame',
+          naxis1: f.naxis1,
+          naxis2: f.naxis2,
+          instrument: f.instrument,
+          telescope: f.telescope,
+          dimensions: (f.naxis1 && f.naxis2) ? `${f.naxis1}x${f.naxis2}` : '—',
+          datatype: 'float64'
+        };
 
-      this.referenceFrame = { name, ...field, metadata };
+        const frameData = { name, ...field, selected: !activeSet, metadata, previouslyAnalyzed: false };
+        const el = this.createThumbElement(name, field, frameData);
 
-      const frameData = { name, ...field, selected: true, metadata, previouslyAnalyzed: false };
-      const el = this.createThumbElement(name, field, frameData);
-      el.classList.add('selected');
-      grid.appendChild(el);
+        if (!activeSet) {
+          this.referenceFrame = { name, ...field, metadata };
+          el.classList.add('selected');
+          activeSet = true;
+          if (!f.has_wcs) {
+            log('WARN', `${name} não tem solução astrométrica (WCS) no cabeçalho. ` +
+                        `O alinhamento e as coordenadas RA/Dec exportadas ficam comprometidos.`);
+          }
+        }
+        grid.appendChild(el);
+      });
 
-      $('ref-count').textContent = '1 frame';
+      if (!activeSet) {
+        log('ERR', 'Nenhum frame de referência legível na pasta dados/referencia.');
+        if (!silent) alert('Os arquivos em dados/referencia não puderam ser lidos como FITS.');
+        return false;
+      }
+
+      const usable = frames.filter(f => !f.error).length;
+      $('ref-count').textContent = usable === 1 ? '1 frame' : `${usable} frames`;
       state.refLoaded = true;
       updateRunButton();
-      log('OK', `Reference frame ingested: ${name} (ZScale thumbnail generated)`);
+      log('OK', `Reference frame ingested: ${this.referenceFrame.name}` +
+                (usable > 1 ? ` (+${usable - 1} alternativa(s) disponível(is))` : ''));
+      return true;
     } catch (e) {
-      log('ERR', 'Erro ao carregar referência do backend: ' + e.message);
-      alert("Erro ao conectar no servidor Backend (" + API_BASE + "). Verifique se 'npm start' está rodando!");
+      log('ERR', 'Erro ao carregar referência: ' + e.message);
+      if (!silent) alert(e.message);
+      return false;
     }
   },
 
@@ -731,6 +835,64 @@ const gallery = {
     log('INFO', `Frame details opened: ${frameData.name} — DATE-OBS: ${m.dateObs || 'N/A'}`);
   },
 
+  /**
+   * Gera e carrega o dataset FITS sintetico de demonstracao.
+   *
+   * Serve para testar o software de ponta a ponta sem depender de download
+   * de arquivos publicos: o backend escreve em dados/ciencia uma serie de
+   * frames com um objeto em movimento de taxa conhecida e em dados/referencia
+   * o frame do mesmo campo sem o objeto. Como a taxa injetada e conhecida, o
+   * resultado do pipeline pode ser conferido contra o valor esperado.
+   */
+  async loadSampleDataset(triggerButton) {
+    const originalText = triggerButton ? triggerButton.textContent : '';
+    if (triggerButton) {
+      triggerButton.disabled = true;
+      triggerButton.textContent = '◈ GERANDO...';
+      triggerButton.style.opacity = '0.6';
+    }
+
+    try {
+      // Frames reais e o campo sintetico tem geometrias diferentes; roda-los
+      // juntos quebraria a subtracao. Perguntamos antes de arquivar os dados
+      // do usuario (que sao MOVIDOS para dados/arquivados_<data>/, nunca apagados).
+      let exclusive = false;
+      const st = await this.apiRequest('/api/sample/status');
+      if (st.user_frames > 0) {
+        exclusive = confirm(
+          `Ja existem ${st.user_frames} arquivo(s) FITS seus nas pastas de entrada.\n\n` +
+          `OK: mover esses arquivos para dados/arquivados_<data>/ e rodar so o exemplo (nada e apagado).\n` +
+          `Cancelar: gerar o exemplo junto dos seus arquivos (a subtracao pode falhar por geometrias diferentes).`
+        );
+      }
+
+      log('INFO', 'Gerando dataset FITS sintetico de demonstracao no backend...');
+      const data = await this.apiRequest(`/api/sample/load?exclusive=${exclusive}`, { method: 'POST' });
+      const ds = data.dataset || {};
+      const exp = ds.expected || {};
+
+      log('OK', data.message || 'Dataset de exemplo gerado.');
+      log('INFO', `Campo sintetico ${ds.image_size}x${ds.image_size} px @ ${ds.pixel_scale_arcsec}"/px, cadencia de ${ds.cadence_minutes} min.`);
+      log('INFO', `Verificacao: o pipeline deve recuperar mu_alfa = ${exp.mu_ra_arcsec_hr}"/hr e mu_delta = ${exp.mu_dec_arcsec_hr}"/hr em ${exp.n_frames} frames.`);
+
+      await this.loadScienceFrames({ silent: true });
+      await this.loadReferenceFrame({ silent: true });
+
+      alert(`Dataset de exemplo carregado.\n\n${(ds.science_files || []).length} frames de ciencia + 1 referencia.\n\nO objeto sintetico se move a ${exp.total_rate_arcsec_hr}"/hr. Rode o pipeline: a tracklet recuperada deve reproduzir essa taxa.`);
+      return true;
+    } catch (e) {
+      log('ERR', 'Falha ao gerar o dataset de exemplo: ' + e.message);
+      alert('Falha ao gerar o dataset de exemplo: ' + e.message);
+      return false;
+    } finally {
+      if (triggerButton) {
+        triggerButton.disabled = false;
+        triggerButton.textContent = originalText;
+        triggerButton.style.opacity = '';
+      }
+    }
+  },
+
   async uploadLocalFiles(folder, inputElement, triggerButton) {
     const files = inputElement.files;
     if (!files || files.length === 0) return;
@@ -751,22 +913,29 @@ const gallery = {
     }
     
     try {
-      const res = await fetch(`${API_BASE}/api/upload/${folder}`, {
+      const data = await this.apiRequest(`/api/upload/${folder}`, {
         method: 'POST',
         body: formData
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Erro no upload');
-      
-      log('OK', `Upload concluído: ${data.total_saved} arquivo(s) salvo(s) em dados/${folder}/.`);
-      
-      // Reporta arquivos rejeitados
+
+      // Reporta arquivos rejeitados ANTES do resumo, para que o motivo real
+      // (extensao nao reconhecida, arquivo vazio, FITS corrompido) fique
+      // visivel no log em vez de virar um generico "pasta vazia" depois.
       if (data.skipped && data.skipped.length > 0) {
         data.skipped.forEach(s => {
-          log('WARN', `Arquivo rejeitado: ${s.filename} — ${s.reason}`);
+          log('ERR', `Arquivo rejeitado: ${s.filename} — ${s.reason}`);
         });
       }
-      
+
+      if (!data.total_saved) {
+        const motivos = (data.skipped || []).map(s => `• ${s.filename}: ${s.reason}`).join('\n');
+        log('ERR', `Nenhum arquivo foi salvo em dados/${folder}/.`);
+        alert(`Nenhum arquivo foi aceito.\n\n${motivos}\n\nExtensoes aceitas: ${data.accepted_extensions || '.fits, .fit, .fts, .fits.fz, .fits.gz'}`);
+        return;
+      }
+
+      log('OK', `Upload concluido: ${data.total_saved} arquivo(s) salvo(s) em dados/${folder}/.`);
+
       // Recarrega a galeria correspondente
       if (folder === 'ciencia') {
         await this.loadScienceFrames();
@@ -789,6 +958,7 @@ const gallery = {
 $('btn-load-science').addEventListener('click', () => gallery.loadScienceFrames());
 $('btn-load-ref').addEventListener('click', () => gallery.loadReferenceFrame());
 $('btn-fits-repo').addEventListener('click', () => { $('fits-repo-overlay').hidden = false; });
+$('btn-sample-data').addEventListener('click', (e) => gallery.loadSampleDataset(e.currentTarget));
 
 $('btn-upload-science').addEventListener('click', () => $('file-upload-science').click());
 $('file-upload-science').addEventListener('change', (e) => {
@@ -1003,6 +1173,7 @@ async function runPipeline() {
 
   // ── INÍCIO DA INTEGRAÇÃO COM BACKEND FASTAPI ─────────────────────────────
   let apiResult = null;
+  let apiError = null;
   try {
     const payload = {
       sigma: parseFloat($('slider-sigma').value),
@@ -1020,22 +1191,23 @@ async function runPipeline() {
       }
     };
     
-    log('INFO', 'Contacting Python Backend (http://localhost:8000/api/pipeline/run)...');
-    
-    // Dispara a requisição real
-    const response = await fetch('http://localhost:8000/api/pipeline/run', {
+    log('INFO', `Contacting Python Backend (${API_BASE}/api/pipeline/run)...`);
+
+    // Dispara a requisicao real (mesma origem resolvida em API_BASE)
+    apiResult = await gallery.apiRequest('/api/pipeline/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
-    
-    if (!response.ok) throw new Error('API Response Error: ' + response.status);
-    
-    apiResult = await response.json();
+
     log('OK', `Backend processing completed in ${apiResult.execution_time.toFixed(2)}s`);
+    if (apiResult.reference_used) log('INFO', `Reference frame usado: ${apiResult.reference_used}`);
+    if (apiResult.message) log('INFO', apiResult.message);
   } catch (error) {
-    log('ERR', 'Failed to connect to Python Backend: ' + error.message);
-    log('WARN', 'Falling back to simulated UI output...');
+    // Sem fallback simulado: exibir tracklets ficticios como se fossem
+    // deteccoes reais levaria o usuario a submeter astrometria inventada.
+    apiError = error.message;
+    log('ERR', 'Falha na execucao do pipeline: ' + error.message);
   }
   // ──────────────────────────────────────────────────────────────────────────
 
@@ -1060,20 +1232,26 @@ async function runPipeline() {
     if (step.n === 5) { setStat('stat-neos', '3'); setStat('stat-rms', '0.031"'); }
   }
 
-  // Use real tracklets from backend if available, else fake ones
-  if (apiResult && apiResult.tracklets) {
-    state.tracklets = apiResult.tracklets.map((t, idx) => ({
+  // Apenas resultados REAIS do backend. Se a chamada falhou, a sessao termina
+  // sem tracklets e com o erro visivel: preencher a tabela com deteccoes
+  // ficticias induziria o usuario a reportar astrometria inventada ao MPC.
+  if (apiResult && Array.isArray(apiResult.tracklets)) {
+    state.tracklets = apiResult.tracklets.map((t) => ({
       ...t,
-      mu_ra: t.mu_ra !== undefined ? t.mu_ra : (40 + Math.random()*20),
-      mu_dec: t.mu_dec !== undefined ? t.mu_dec : (-20 + Math.random()*10),
-      rmsRA: 0.03, rmsDec: 0.03, frames: framesToAnalyze.length, confirmed: true
+      mu_ra: t.mu_ra ?? 0,
+      mu_dec: t.mu_dec ?? 0,
+      rmsRA: t.rms_ra ?? 0,
+      rmsDec: t.rms_dec ?? 0,
+      frames: t.frames ?? framesToAnalyze.length,
+      confirmed: true
     }));
+    if (state.tracklets.length === 0) {
+      log('WARN', 'Pipeline concluido sem candidatos confirmados. Nenhuma tracklet a reportar.');
+    }
   } else {
-    state.tracklets = [
-      { id: 'TRK_0001', ra: '14 01 23.412', dec: '+41 12 08.34', mu_ra: 42.3, mu_dec: -18.7, chi2: 0.84, rmsRA: 0.031, rmsDec: 0.028, frames: framesToAnalyze.length, confirmed: true },
-      { id: 'TRK_0002', ra: '14 01 55.871', dec: '+41 08 42.11', mu_ra: 7.1, mu_dec: 3.2, chi2: 1.12, rmsRA: 0.029, rmsDec: 0.033, frames: framesToAnalyze.length, confirmed: true },
-      { id: 'TRK_0003', ra: '14 02 11.043', dec: '+41 19 55.72', mu_ra: 124.8, mu_dec: -67.3, chi2: 2.31, rmsRA: 0.041, rmsDec: 0.038, frames: Math.max(3, framesToAnalyze.length - 3), confirmed: true },
-    ];
+    state.tracklets = [];
+    log('ERR', 'Sem resultados do backend' + (apiError ? `: ${apiError}` : '.'));
+    alert(`O pipeline nao produziu resultados.\n\n${apiError || 'O backend nao respondeu.'}`);
   }
 
   logSep();

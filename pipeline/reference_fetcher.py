@@ -8,7 +8,15 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astroquery.skyview import SkyView
 
+from .fits_utils import wcs_from_header
+
 logger = logging.getLogger(__name__)
+
+# Teto para o recorte pedido ao SkyView. Acima disso o download deixa de ser
+# prático e o DSS já não acrescenta informação real (sua resolução nativa é da
+# ordem de 1 arcsec/pixel).
+MAX_REFERENCE_PIXELS = 2048
+
 
 class ReferenceFetcher:
     """
@@ -26,27 +34,32 @@ class ReferenceFetcher:
                 return None
                 
             first_science = science_files[0]
+            science_shape = None
             logger.info(f"Extraindo coordenadas de {first_science.name} para download da referência...")
             
             with fits.open(first_science) as hdul:
                 # Normalmente, imagens calibradas têm os dados na extensão 0
                 header = hdul[0].header
                 
+                # `wcs_from_header` reconstrói o WCS quando o cabeçalho traz
+                # convenções legadas que fazem a wcslib abortar — sem isso, um
+                # frame com astrometria perfeitamente válida caía no fallback de
+                # RA/DEC e o campo baixado saía com raio e amostragem errados.
+                wcs = wcs_from_header(header)
+                has_wcs = wcs is not None
+                if not has_wcs:
+                    logger.warning("WCS não pôde ser interpretado. Usando fallback de RA/DEC do cabeçalho...")
+
+                # A forma do frame é lida do cabeçalho e vale mesmo sem WCS:
+                # é ela que define a amostragem pedida ao SkyView.
                 try:
-                    import warnings
-                    from astropy.wcs import FITSFixedWarning
-                    with warnings.catch_warnings():
-                        warnings.simplefilter('ignore', FITSFixedWarning)
-                        wcs = WCS(header)
-                        has_wcs = wcs.has_celestial
-                except Exception as wcs_err:
-                    logger.warning(f"Erro ao analisar WCS ({wcs_err}). Usando fallback de RA/DEC...")
-                    wcs = None
-                    has_wcs = False
+                    science_shape = (int(header["NAXIS2"]), int(header["NAXIS1"]))
+                except (KeyError, TypeError, ValueError):
+                    science_shape = None
                 
                 # Se tiver WCS completo:
                 if has_wcs:
-                    ny, nx = hdul[0].data.shape
+                    ny, nx = science_shape if science_shape else hdul[0].data.shape
                     # Pega o centro
                     center_sky = wcs.pixel_to_world(nx/2, ny/2)
                     
@@ -78,12 +91,26 @@ class ReferenceFetcher:
             
             logger.info(f"Coordenadas centrais (RA={center_sky.ra.deg:.4f}, DEC={center_sky.dec.deg:.4f}).")
             logger.info(f"Buscando no SkyView (DSS) com raio de {radius_arcmin:.1f} arcmin...")
-            
+
+            # Amostragem do recorte. Sem este parâmetro o SkyView devolve um
+            # recorte de 300x300 px: para um frame de ciência de alguns milhares
+            # de pixels isso é uma referência dezenas de vezes mais grosseira, e
+            # reamostrar a ciência nessa grade jogava fora quase toda a
+            # resolução antes da subtração. Pedimos um número de pixels
+            # compatível com o frame de ciência (com teto, para não gerar um
+            # download gigante).
+            requested_pixels = 300
+            if science_shape is not None:
+                requested_pixels = int(min(max(science_shape), MAX_REFERENCE_PIXELS))
+                requested_pixels = max(requested_pixels, 300)
+            logger.info(f"Amostragem solicitada ao SkyView: {requested_pixels}x{requested_pixels} px.")
+
             # 2. Fazer query no SkyView (usamos o Digitized Sky Survey padrão)
             hdulist_list = SkyView.get_images(
-                position=center_sky, 
-                survey=['DSS'], 
-                radius=radius_arcmin * u.arcmin
+                position=center_sky,
+                survey=['DSS'],
+                radius=radius_arcmin * u.arcmin,
+                pixels=str(requested_pixels),
             )
             
             if not hdulist_list:
